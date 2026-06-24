@@ -4,3 +4,4 @@ python-dotenv
 pyyaml
 flask
 flask-cors
+gunicorn
