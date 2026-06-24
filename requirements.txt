@@ -1,0 +1,6 @@
+drain3
+requests
+python-dotenv
+pyyaml
+flask
+flask-cors

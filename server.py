@@ -1,0 +1,123 @@
+"""Flask web server wrapping the AdaptiveDrain pipeline."""
+
+import os
+import sys
+import threading
+
+sys.path.insert(0, os.path.dirname(__file__))
+
+from flask import Flask, jsonify, request, send_from_directory
+from flask_cors import CORS
+from drain3 import TemplateMiner
+from dotenv import load_dotenv
+
+from pipeline import TemplatePipeline
+from normalizer import OCSFNormalizer
+from persistence import StatePersistence
+from metrics import MetricsCollector
+from approver import WebApprover
+
+load_dotenv()
+
+app = Flask(__name__, static_folder="static")
+CORS(app)
+
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
+_HERE = os.path.dirname(os.path.abspath(__file__))
+
+approver    = WebApprover()
+normalizer  = OCSFNormalizer(os.path.join(_HERE, "ocsf_map.yml"))
+persistence = StatePersistence(os.path.join(_HERE, "state.json"))
+metrics     = MetricsCollector(emit_interval_seconds=999)
+metrics.start()
+
+drain    = TemplateMiner()
+pipeline = TemplatePipeline(
+    drain_instance=drain,
+    openrouter_api_key=GROQ_API_KEY,
+    confirm_threshold=3,
+    normalizer=normalizer,
+    persistence=persistence,
+    metrics=metrics,
+    approver=approver,
+)
+
+if persistence.exists():
+    pipeline.load()
+
+_results_store: dict = {}
+_results_lock = threading.Lock()
+
+
+@app.route("/")
+def index():
+    return send_from_directory("static", "index.html")
+
+
+@app.route("/upload", methods=["POST"])
+def upload():
+    file = request.files.get("file")
+    if not file:
+        return jsonify({"error": "no file"}), 400
+
+    import uuid
+    session_id = str(uuid.uuid4())
+    lines = file.read().decode("utf-8", errors="replace").splitlines()
+    lines = [l for l in lines if l.strip()][:1000]
+
+    results = []
+    for line in lines:
+        result = pipeline.ingest(line)
+        results.append({
+            "log": line[:120],
+            "change_type": result.get("change_type"),
+            "cluster_id": result.get("cluster_id"),
+            "template": result.get("template"),
+            "ocsf": result.get("ocsf"),
+        })
+
+    with _results_lock:
+        _results_store[session_id] = results
+
+    pipeline.save()
+
+    return jsonify({
+        "session_id": session_id,
+        "total": len(results),
+        "results": results,
+    })
+
+
+@app.route("/decisions", methods=["GET"])
+def get_decisions():
+    return jsonify({"decisions": approver.get_pending()})
+
+
+@app.route("/decisions/<decision_id>/respond", methods=["POST"])
+def respond_decision(decision_id):
+    body = request.get_json() or {}
+    action = body.get("action")
+    edited = body.get("edited_decision")
+
+    if action not in ("accept", "reject", "edit"):
+        return jsonify({"error": "invalid action"}), 400
+
+    ok = approver.respond(decision_id, action, edited)
+    if not ok:
+        return jsonify({"error": "decision not found or timed out"}), 404
+
+    return jsonify({"ok": True})
+
+
+@app.route("/stats", methods=["GET"])
+def get_stats():
+    snap = metrics.snapshot()
+    snap.pop("timestamp", None)
+    return jsonify({
+        "pipeline": pipeline.stats(),
+        "metrics": snap,
+    })
+
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=5050, debug=False)

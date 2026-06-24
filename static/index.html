@@ -1,0 +1,859 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AdaptiveDrain</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg:       #0f1117;
+    --card:     #1a1d27;
+    --border:   #2a2d3e;
+    --accent:   #6366f1;
+    --green:    #22c55e;
+    --red:      #ef4444;
+    --yellow:   #eab308;
+    --gray:     #6b7280;
+    --text:     #e2e8f0;
+    --muted:    #94a3b8;
+    --radius:   8px;
+  }
+
+  body {
+    font-family: 'Inter', system-ui, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    font-size: 14px;
+    line-height: 1.5;
+  }
+
+  header {
+    padding: 16px 24px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  header h1 { font-size: 18px; font-weight: 600; letter-spacing: -0.3px; }
+  header .logo {
+    width: 28px; height: 28px;
+    background: var(--accent);
+    border-radius: 6px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 14px; font-weight: 700; color: #fff;
+  }
+  header .subtitle { color: var(--muted); font-size: 12px; margin-left: auto; }
+
+  .layout {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 20px;
+    padding: 20px 24px;
+    max-width: 1600px;
+    margin: 0 auto;
+  }
+
+  .col { display: flex; flex-direction: column; gap: 16px; }
+
+  .card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 16px;
+  }
+
+  .card-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 14px;
+  }
+  .card-header h2 { font-size: 14px; font-weight: 600; }
+
+  .badge {
+    background: var(--accent);
+    color: #fff;
+    font-size: 11px;
+    font-weight: 600;
+    padding: 2px 7px;
+    border-radius: 99px;
+    min-width: 20px;
+    text-align: center;
+  }
+  .badge.zero { background: var(--border); color: var(--muted); }
+
+  /* Drop zone */
+  #drop-zone {
+    border: 2px dashed var(--border);
+    border-radius: var(--radius);
+    padding: 40px 20px;
+    text-align: center;
+    cursor: pointer;
+    transition: border-color 0.15s, background 0.15s;
+    position: relative;
+  }
+  #drop-zone:hover, #drop-zone.drag-over {
+    border-color: var(--accent);
+    background: rgba(99,102,241,0.06);
+  }
+  #drop-zone .drop-icon { font-size: 32px; margin-bottom: 8px; }
+  #drop-zone p { color: var(--muted); font-size: 13px; }
+  #drop-zone p strong { color: var(--text); }
+  #file-input { display: none; }
+
+  /* Spinner */
+  .spinner {
+    display: none;
+    width: 20px; height: 20px;
+    border: 2px solid var(--border);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin 0.7s linear infinite;
+    margin: 12px auto 0;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .spinner.visible { display: block; }
+
+  #upload-status {
+    font-size: 12px;
+    color: var(--muted);
+    text-align: center;
+    margin-top: 8px;
+    min-height: 18px;
+  }
+  #upload-status.error { color: var(--red); }
+  #upload-status.success { color: var(--green); }
+
+  /* Results table */
+  .table-wrap {
+    overflow-y: auto;
+    max-height: 400px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+  }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th {
+    background: #13151f;
+    color: var(--muted);
+    text-align: left;
+    padding: 7px 10px;
+    font-weight: 500;
+    position: sticky; top: 0;
+    border-bottom: 1px solid var(--border);
+  }
+  td { padding: 6px 10px; border-bottom: 1px solid #1e2133; }
+  tr:last-child td { border-bottom: none; }
+  tr:hover td { background: rgba(255,255,255,0.02); }
+
+  .ct { display: inline-block; padding: 1px 7px; border-radius: 4px; font-size: 11px; font-weight: 600; }
+  .ct-CREATE { background: rgba(34,197,94,0.15); color: var(--green); }
+  .ct-UPDATE { background: rgba(234,179,8,0.15); color: var(--yellow); }
+  .ct-NONE   { background: rgba(107,114,128,0.15); color: var(--gray); }
+
+  .mono { font-family: 'SF Mono', 'Fira Code', monospace; font-size: 11px; }
+  .trunc { max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: block; }
+
+  /* Decision cards */
+  #decisions-list { display: flex; flex-direction: column; gap: 10px; }
+
+  .decision-card {
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    overflow: hidden;
+  }
+  .decision-card-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 14px;
+    background: #1e2133;
+    flex-wrap: wrap;
+  }
+  .decision-card-header .cluster-id {
+    font-weight: 600;
+    font-size: 13px;
+  }
+  .type-tag {
+    font-size: 11px;
+    padding: 2px 7px;
+    border-radius: 4px;
+    font-weight: 500;
+    background: rgba(99,102,241,0.15);
+    color: var(--accent);
+  }
+  .dec-tag {
+    font-size: 11px;
+    padding: 2px 7px;
+    border-radius: 4px;
+    font-weight: 600;
+    margin-left: auto;
+  }
+  .dec-merge { background: rgba(99,102,241,0.2); color: #a5b4fc; }
+  .dec-split { background: rgba(234,179,8,0.2); color: var(--yellow); }
+  .dec-reset { background: rgba(239,68,68,0.15); color: var(--red); }
+  .dec-keep  { background: rgba(107,114,128,0.15); color: var(--gray); }
+
+  .decision-card-body { padding: 12px 14px; }
+
+  .field-row { margin-bottom: 8px; }
+  .field-label { font-size: 11px; color: var(--muted); font-weight: 500; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 3px; }
+  .field-value { font-size: 12px; }
+  .field-value.mono-val { font-family: 'SF Mono', 'Fira Code', monospace; background: #13151f; padding: 4px 8px; border-radius: 4px; border: 1px solid var(--border); }
+
+  details.samples-detail { margin-top: 8px; }
+  details.samples-detail summary {
+    cursor: pointer;
+    font-size: 11px;
+    color: var(--muted);
+    user-select: none;
+    padding: 3px 0;
+  }
+  details.samples-detail summary:hover { color: var(--text); }
+  .samples-list { margin-top: 6px; display: flex; flex-direction: column; gap: 3px; }
+  .sample-line {
+    font-family: 'SF Mono', 'Fira Code', monospace;
+    font-size: 11px;
+    background: #13151f;
+    border: 1px solid var(--border);
+    padding: 4px 8px;
+    border-radius: 4px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--muted);
+  }
+
+  .sub-templates { display: flex; flex-direction: column; gap: 3px; }
+
+  .decision-actions {
+    display: flex;
+    gap: 8px;
+    padding: 10px 14px;
+    border-top: 1px solid var(--border);
+    background: #161926;
+  }
+
+  .btn {
+    padding: 6px 14px;
+    border-radius: 6px;
+    border: none;
+    cursor: pointer;
+    font-size: 12px;
+    font-weight: 600;
+    font-family: inherit;
+    transition: opacity 0.1s;
+  }
+  .btn:hover { opacity: 0.85; }
+  .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+  .btn-accept { background: var(--green); color: #fff; }
+  .btn-reject { background: var(--red); color: #fff; }
+  .btn-edit   { background: #3b82f6; color: #fff; }
+  .btn-cancel { background: var(--border); color: var(--muted); }
+  .btn-submit { background: var(--accent); color: #fff; }
+
+  /* Edit form */
+  .edit-form {
+    padding: 12px 14px;
+    border-top: 1px solid var(--border);
+    background: #13151f;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .edit-form label { font-size: 11px; color: var(--muted); font-weight: 500; display: block; margin-bottom: 4px; }
+  .edit-form input, .edit-form select, .edit-form textarea {
+    width: 100%;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    color: var(--text);
+    font-family: 'SF Mono', 'Fira Code', monospace;
+    font-size: 12px;
+    padding: 6px 10px;
+    resize: vertical;
+  }
+  .edit-form input:focus, .edit-form select:focus, .edit-form textarea:focus {
+    outline: none;
+    border-color: var(--accent);
+  }
+  .edit-form select { font-family: inherit; }
+  .edit-form-actions { display: flex; gap: 8px; }
+
+  .empty-state { text-align: center; color: var(--muted); padding: 32px 0; font-size: 13px; }
+  .empty-state .icon { font-size: 28px; margin-bottom: 8px; }
+
+  /* Stats grid */
+  .stats-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 8px;
+  }
+  .stat-cell {
+    background: #13151f;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 10px 12px;
+  }
+  .stat-cell .stat-label { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; font-weight: 500; }
+  .stat-cell .stat-val { font-size: 22px; font-weight: 600; margin-top: 2px; color: var(--text); }
+
+  .store-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 8px;
+    margin-top: 12px;
+  }
+  .store-cell {
+    background: #13151f;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 8px 12px;
+    text-align: center;
+  }
+  .store-cell .store-label { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.3px; }
+  .store-cell .store-val { font-size: 18px; font-weight: 600; margin-top: 2px; }
+  .store-cell.active .store-val { color: var(--green); }
+  .store-cell.pending .store-val { color: var(--yellow); }
+  .store-cell.merged .store-val { color: var(--gray); }
+
+  .section-divider {
+    font-size: 11px;
+    color: var(--muted);
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 8px;
+    margin-top: 4px;
+  }
+
+  @media (max-width: 900px) {
+    .layout { grid-template-columns: 1fr; }
+    .stats-grid { grid-template-columns: repeat(2, 1fr); }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">A</div>
+  <h1>AdaptiveDrain</h1>
+  <span class="subtitle">LLM-powered log template pipeline</span>
+</header>
+
+<div class="layout">
+  <!-- LEFT COLUMN -->
+  <div class="col">
+
+    <!-- Upload Panel -->
+    <div class="card">
+      <div class="card-header">
+        <h2>Upload Log File</h2>
+      </div>
+      <div id="drop-zone" onclick="document.getElementById('file-input').click()">
+        <div class="drop-icon">&#128196;</div>
+        <p><strong>Drop log file here</strong> or click to browse</p>
+        <p style="margin-top:4px;font-size:11px;">.log, .txt, or any text file &mdash; up to 1 000 lines</p>
+        <div class="spinner" id="spinner"></div>
+      </div>
+      <div id="upload-status"></div>
+      <input type="file" id="file-input" accept="*">
+    </div>
+
+    <!-- Results Panel -->
+    <div class="card" id="results-card" style="display:none">
+      <div class="card-header">
+        <h2>Ingestion Results</h2>
+        <span class="badge" id="results-count">0</span>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Change</th>
+              <th>Cluster</th>
+              <th>OCSF Class</th>
+              <th>Template</th>
+            </tr>
+          </thead>
+          <tbody id="results-tbody"></tbody>
+        </table>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- RIGHT COLUMN -->
+  <div class="col">
+
+    <!-- Pending Approvals -->
+    <div class="card">
+      <div class="card-header">
+        <h2>Pending Decisions</h2>
+        <span class="badge zero" id="decisions-badge">0</span>
+      </div>
+      <div id="decisions-list">
+        <div class="empty-state">
+          <div class="icon">&#10003;</div>
+          <div>No pending decisions</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Stats Panel -->
+    <div class="card">
+      <div class="card-header">
+        <h2>Pipeline Stats</h2>
+      </div>
+      <div class="section-divider">Counters</div>
+      <div class="stats-grid" id="stats-grid">
+        <div class="stat-cell"><div class="stat-label">Logs Ingested</div><div class="stat-val" id="s-logs_ingested">—</div></div>
+        <div class="stat-cell"><div class="stat-label">Templates Created</div><div class="stat-val" id="s-templates_created">—</div></div>
+        <div class="stat-cell"><div class="stat-label">Templates Updated</div><div class="stat-val" id="s-templates_updated">—</div></div>
+        <div class="stat-cell"><div class="stat-label">Templates Merged</div><div class="stat-val" id="s-templates_merged">—</div></div>
+        <div class="stat-cell"><div class="stat-label">Templates Split</div><div class="stat-val" id="s-templates_split">—</div></div>
+        <div class="stat-cell"><div class="stat-label">LLM Calls</div><div class="stat-val" id="s-llm_calls">—</div></div>
+        <div class="stat-cell"><div class="stat-label">LLM Errors</div><div class="stat-val" id="s-llm_errors">—</div></div>
+        <div class="stat-cell"><div class="stat-label">OCSF Matched</div><div class="stat-val" id="s-ocsf_matched">—</div></div>
+        <div class="stat-cell"><div class="stat-label">OCSF Unmatched</div><div class="stat-val" id="s-ocsf_unmatched">—</div></div>
+      </div>
+      <div class="section-divider" style="margin-top:16px;">Template Store</div>
+      <div class="store-grid">
+        <div class="store-cell active"><div class="store-label">Active</div><div class="store-val" id="ts-active">—</div></div>
+        <div class="store-cell pending"><div class="store-label">Pending Merge</div><div class="store-val" id="ts-pending_merge">—</div></div>
+        <div class="store-cell merged"><div class="store-label">Merged</div><div class="store-val" id="ts-merged">—</div></div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<script>
+// ──────────────────────────────────────────────
+// Upload
+// ──────────────────────────────────────────────
+const dropZone   = document.getElementById('drop-zone');
+const fileInput  = document.getElementById('file-input');
+const spinner    = document.getElementById('spinner');
+const statusEl   = document.getElementById('upload-status');
+
+dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('drag-over'); });
+dropZone.addEventListener('dragleave', ()  => dropZone.classList.remove('drag-over'));
+dropZone.addEventListener('drop', e => {
+  e.preventDefault();
+  dropZone.classList.remove('drag-over');
+  const file = e.dataTransfer.files[0];
+  if (file) uploadFile(file);
+});
+fileInput.addEventListener('change', () => {
+  if (fileInput.files[0]) uploadFile(fileInput.files[0]);
+});
+
+function setStatus(msg, type) {
+  statusEl.textContent = msg;
+  statusEl.className = type || '';
+}
+
+async function uploadFile(file) {
+  setStatus('Uploading ' + file.name + '…');
+  spinner.classList.add('visible');
+  dropZone.style.pointerEvents = 'none';
+
+  try {
+    const fd = new FormData();
+    fd.append('file', file);
+    const res = await fetch('/upload', { method: 'POST', body: fd });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Upload failed');
+    setStatus('Ingested ' + data.total + ' lines from ' + file.name, 'success');
+    renderResults(data.results);
+  } catch (err) {
+    setStatus(err.message, 'error');
+  } finally {
+    spinner.classList.remove('visible');
+    dropZone.style.pointerEvents = '';
+    fileInput.value = '';
+  }
+}
+
+// ──────────────────────────────────────────────
+// Results table
+// ──────────────────────────────────────────────
+function renderResults(results) {
+  const card  = document.getElementById('results-card');
+  const tbody = document.getElementById('results-tbody');
+  const count = document.getElementById('results-count');
+
+  count.textContent = results.length;
+  tbody.innerHTML = '';
+  card.style.display = '';
+
+  results.forEach((r, i) => {
+    const tr = document.createElement('tr');
+    const ocsf = r.ocsf ? (r.ocsf.class_name || r.ocsf.class_uid || JSON.stringify(r.ocsf)) : '—';
+    const tpl  = (r.template || '').substring(0, 60) + ((r.template || '').length > 60 ? '…' : '');
+    const ct   = r.change_type || 'NONE';
+    tr.innerHTML = `
+      <td class="mono">${i + 1}</td>
+      <td><span class="ct ct-${ct}">${ct}</span></td>
+      <td class="mono">${r.cluster_id || '—'}</td>
+      <td>${ocsf}</td>
+      <td><span class="mono trunc" title="${esc(r.template || '')}">${esc(tpl)}</span></td>
+    `;
+    tbody.appendChild(tr);
+  });
+}
+
+// ──────────────────────────────────────────────
+// Decisions polling
+// ──────────────────────────────────────────────
+let _decisionsCache = {};
+
+async function pollDecisions() {
+  try {
+    const res = await fetch('/decisions');
+    if (!res.ok) return;
+    const { decisions } = await res.json();
+    renderDecisions(decisions);
+  } catch (_) {}
+}
+
+function renderDecisions(decisions) {
+  const list  = document.getElementById('decisions-list');
+  const badge = document.getElementById('decisions-badge');
+  badge.textContent = decisions.length;
+  badge.className = 'badge' + (decisions.length === 0 ? ' zero' : '');
+
+  if (decisions.length === 0) {
+    list.innerHTML = `<div class="empty-state"><div class="icon">&#10003;</div><div>No pending decisions</div></div>`;
+    _decisionsCache = {};
+    return;
+  }
+
+  const incoming = {};
+  decisions.forEach(d => incoming[d.id] = d);
+
+  // Remove cards for gone decisions
+  Object.keys(_decisionsCache).forEach(id => {
+    if (!incoming[id]) {
+      const el = document.getElementById('dc-' + id);
+      if (el) el.remove();
+      delete _decisionsCache[id];
+    }
+  });
+
+  // Add new cards
+  decisions.forEach(d => {
+    if (!_decisionsCache[d.id]) {
+      _decisionsCache[d.id] = d;
+      const el = buildDecisionCard(d);
+      // Insert at top if it's the first or prepend
+      const empty = list.querySelector('.empty-state');
+      if (empty) empty.remove();
+      list.prepend(el);
+    }
+  });
+}
+
+function buildDecisionCard(d) {
+  const dec  = d.decision || {};
+  const kind = dec.decision || 'keep';
+  const item = d.item || {};
+
+  const div = document.createElement('div');
+  div.className = 'decision-card';
+  div.id = 'dc-' + d.id;
+
+  // ── Extra decision detail ──
+  let detailHtml = '';
+  if (kind === 'merge') {
+    detailHtml = `
+      <div class="field-row">
+        <div class="field-label">Merge Target</div>
+        <div class="field-value mono-val">${esc(dec.target_cluster_id || '—')}</div>
+      </div>
+      <div class="field-row">
+        <div class="field-label">Merged Template</div>
+        <div class="field-value mono-val">${esc(dec.merged_template || '—')}</div>
+      </div>`;
+  } else if (kind === 'split') {
+    const subs = (dec.sub_templates || []).map(s => `<div class="sample-line">${esc(s)}</div>`).join('');
+    detailHtml = `
+      <div class="field-row">
+        <div class="field-label">Sub-Templates</div>
+        <div class="sub-templates">${subs || '<span style="color:var(--muted)">none</span>'}</div>
+      </div>`;
+  } else if (kind === 'reset') {
+    detailHtml = `
+      <div class="field-row">
+        <div class="field-label">Reset Template</div>
+        <div class="field-value mono-val">${esc(dec.reset_template || '—')}</div>
+      </div>`;
+  }
+
+  const samples = (item.samples || []).map(s => `<div class="sample-line">${esc(s)}</div>`).join('');
+
+  div.innerHTML = `
+    <div class="decision-card-header">
+      <span class="cluster-id">${esc(item.cluster_id || '—')}</span>
+      <span class="type-tag">${esc(item.type || '')}</span>
+      <span class="dec-tag dec-${kind}">${kind}</span>
+    </div>
+    <div class="decision-card-body">
+      <div class="field-row">
+        <div class="field-label">Template</div>
+        <div class="field-value mono-val">${esc(item.template || '—')}</div>
+      </div>
+      <details class="samples-detail">
+        <summary>${(item.samples || []).length} sample log(s)</summary>
+        <div class="samples-list">${samples}</div>
+      </details>
+      <div class="field-row" style="margin-top:10px;">
+        <div class="field-label">Reasoning</div>
+        <div class="field-value">${esc(dec.reasoning || '—')}</div>
+      </div>
+      ${detailHtml}
+    </div>
+    <div class="decision-actions" id="da-${d.id}">
+      <button class="btn btn-accept" onclick="respond('${d.id}','accept',this)">&#10003; Accept</button>
+      <button class="btn btn-reject" onclick="respond('${d.id}','reject',this)">&#10007; Reject</button>
+      <button class="btn btn-edit"   onclick="showEditForm('${d.id}')">&#9998; Edit</button>
+    </div>
+    <div id="ef-${d.id}" style="display:none"></div>
+  `;
+  return div;
+}
+
+async function respond(id, action, btn) {
+  const card = document.getElementById('dc-' + id);
+  if (!card) return;
+  card.querySelectorAll('button').forEach(b => b.disabled = true);
+  try {
+    const res = await fetch(`/decisions/${id}/respond`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action }),
+    });
+    if (res.ok) {
+      card.style.opacity = '0.4';
+      card.style.pointerEvents = 'none';
+      setTimeout(() => { card.remove(); delete _decisionsCache[id]; updateBadge(); }, 600);
+    } else {
+      const data = await res.json();
+      alert('Error: ' + (data.error || res.status));
+      card.querySelectorAll('button').forEach(b => b.disabled = false);
+    }
+  } catch (err) {
+    alert(err.message);
+    card.querySelectorAll('button').forEach(b => b.disabled = false);
+  }
+}
+
+function showEditForm(id) {
+  const efEl = document.getElementById('ef-' + id);
+  if (!efEl) return;
+
+  const d = _decisionsCache[id];
+  if (!d) return;
+  const dec  = d.decision || {};
+  const kind = dec.decision || 'keep';
+
+  efEl.style.display = '';
+  efEl.innerHTML = buildEditForm(id, kind, dec);
+}
+
+function buildEditForm(id, kind, dec) {
+  const decOptions = ['keep','merge','split','reset'].map(v =>
+    `<option value="${v}"${v===kind?' selected':''}>${v}</option>`
+  ).join('');
+
+  let extraFields = '';
+  if (kind === 'merge') {
+    extraFields = `
+      <div>
+        <label>Merged Template</label>
+        <input type="text" id="ef-merged_template-${id}" value="${esc(dec.merged_template || '')}">
+      </div>`;
+  } else if (kind === 'split') {
+    const subs = (dec.sub_templates || []).join('\n');
+    extraFields = `
+      <div>
+        <label>Sub-Templates (one per line)</label>
+        <textarea id="ef-sub_templates-${id}" rows="4">${esc(subs)}</textarea>
+      </div>`;
+  } else if (kind === 'reset') {
+    extraFields = `
+      <div>
+        <label>Reset Template</label>
+        <input type="text" id="ef-reset_template-${id}" value="${esc(dec.reset_template || '')}">
+      </div>`;
+  }
+
+  return `
+    <div class="edit-form">
+      <div>
+        <label>Decision Type</label>
+        <select id="ef-type-${id}" onchange="refreshEditForm('${id}')">
+          ${decOptions}
+        </select>
+      </div>
+      <div>
+        <label>Reasoning</label>
+        <input type="text" id="ef-reasoning-${id}" value="${esc(dec.reasoning || '')}">
+      </div>
+      <div id="ef-extra-${id}">${extraFields}</div>
+      <div class="edit-form-actions">
+        <button class="btn btn-submit" onclick="submitEdit('${id}')">Submit</button>
+        <button class="btn btn-cancel" onclick="cancelEdit('${id}')">Cancel</button>
+      </div>
+    </div>`;
+}
+
+function refreshEditForm(id) {
+  const d = _decisionsCache[id];
+  if (!d) return;
+  const newKind = document.getElementById('ef-type-' + id).value;
+  const extraEl = document.getElementById('ef-extra-' + id);
+  if (!extraEl) return;
+
+  const currentDec = Object.assign({}, d.decision, { decision: newKind });
+  let extraFields = '';
+  if (newKind === 'merge') {
+    extraFields = `
+      <div>
+        <label>Merged Template</label>
+        <input type="text" id="ef-merged_template-${id}" value="${esc(currentDec.merged_template || '')}">
+      </div>`;
+  } else if (newKind === 'split') {
+    const subs = (currentDec.sub_templates || []).join('\n');
+    extraFields = `
+      <div>
+        <label>Sub-Templates (one per line)</label>
+        <textarea id="ef-sub_templates-${id}" rows="4">${esc(subs)}</textarea>
+      </div>`;
+  } else if (newKind === 'reset') {
+    extraFields = `
+      <div>
+        <label>Reset Template</label>
+        <input type="text" id="ef-reset_template-${id}" value="${esc(currentDec.reset_template || '')}">
+      </div>`;
+  }
+  extraEl.innerHTML = extraFields;
+}
+
+async function submitEdit(id) {
+  const kind      = document.getElementById('ef-type-' + id).value;
+  const reasoning = document.getElementById('ef-reasoning-' + id).value;
+
+  const edited = { decision: kind, reasoning };
+
+  if (kind === 'merge') {
+    edited.merged_template = (document.getElementById('ef-merged_template-' + id) || {}).value || '';
+    const d = _decisionsCache[id];
+    if (d && d.decision) edited.target_cluster_id = d.decision.target_cluster_id;
+  } else if (kind === 'split') {
+    const raw = (document.getElementById('ef-sub_templates-' + id) || {}).value || '';
+    edited.sub_templates = raw.split('\n').map(s => s.trim()).filter(Boolean);
+  } else if (kind === 'reset') {
+    edited.reset_template = (document.getElementById('ef-reset_template-' + id) || {}).value || '';
+  }
+
+  const card = document.getElementById('dc-' + id);
+  if (card) card.querySelectorAll('button').forEach(b => b.disabled = true);
+
+  try {
+    const res = await fetch(`/decisions/${id}/respond`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'edit', edited_decision: edited }),
+    });
+    if (res.ok) {
+      if (card) {
+        card.style.opacity = '0.4';
+        card.style.pointerEvents = 'none';
+        setTimeout(() => { card.remove(); delete _decisionsCache[id]; updateBadge(); }, 600);
+      }
+    } else {
+      const data = await res.json();
+      alert('Error: ' + (data.error || res.status));
+      if (card) card.querySelectorAll('button').forEach(b => b.disabled = false);
+    }
+  } catch (err) {
+    alert(err.message);
+    if (card) card.querySelectorAll('button').forEach(b => b.disabled = false);
+  }
+}
+
+function cancelEdit(id) {
+  const efEl = document.getElementById('ef-' + id);
+  if (efEl) efEl.style.display = 'none';
+  const card = document.getElementById('dc-' + id);
+  if (card) card.querySelectorAll('button').forEach(b => b.disabled = false);
+}
+
+function updateBadge() {
+  const count = Object.keys(_decisionsCache).length;
+  const badge = document.getElementById('decisions-badge');
+  badge.textContent = count;
+  badge.className = 'badge' + (count === 0 ? ' zero' : '');
+  if (count === 0) {
+    const list = document.getElementById('decisions-list');
+    if (!list.querySelector('.empty-state')) {
+      list.innerHTML = `<div class="empty-state"><div class="icon">&#10003;</div><div>No pending decisions</div></div>`;
+    }
+  }
+}
+
+// ──────────────────────────────────────────────
+// Stats polling
+// ──────────────────────────────────────────────
+const METRIC_KEYS = [
+  'logs_ingested','templates_created','templates_updated',
+  'templates_merged','templates_split','llm_calls',
+  'llm_errors','ocsf_matched','ocsf_unmatched',
+];
+
+async function pollStats() {
+  try {
+    const res = await fetch('/stats');
+    if (!res.ok) return;
+    const data = await res.json();
+    const m = data.metrics || {};
+    METRIC_KEYS.forEach(k => {
+      const el = document.getElementById('s-' + k);
+      if (el) el.textContent = m[k] !== undefined ? m[k] : 0;
+    });
+    const ts = (data.pipeline && data.pipeline.templates) ? data.pipeline.templates : {};
+    document.getElementById('ts-active').textContent       = ts.active       !== undefined ? ts.active : 0;
+    document.getElementById('ts-pending_merge').textContent = ts.pending_merge !== undefined ? ts.pending_merge : 0;
+    document.getElementById('ts-merged').textContent        = ts.merged        !== undefined ? ts.merged : 0;
+  } catch (_) {}
+}
+
+// ──────────────────────────────────────────────
+// Utility
+// ──────────────────────────────────────────────
+function esc(str) {
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+// ──────────────────────────────────────────────
+// Boot
+// ──────────────────────────────────────────────
+pollDecisions();
+pollStats();
+setInterval(pollDecisions, 2000);
+setInterval(pollStats, 5000);
+</script>
+</body>
+</html>

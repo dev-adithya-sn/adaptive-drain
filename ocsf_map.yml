@@ -1,0 +1,126 @@
+# OCSF normalization rules for AdaptiveDrain.
+# Rules are evaluated top-to-bottom; the first regex (case-insensitive) that
+# matches the template string wins. Patterns are matched with re.search, so
+# they need not anchor to the whole template.
+rules:
+  # ---- SSH activity (OCSF class 3002) ----
+  - pattern: "sshd.*accepted|ssh.*login.*success|accepted (?:password|publickey) for"
+    ocsf_class_uid: 3002
+    ocsf_class_name: "SSH Activity"
+    activity_id: 1
+    activity_name: "Logon"
+    severity_id: 1
+    category_uid: 3
+    category_name: "Identity & Access Management"
+
+  - pattern: "sshd.*failed|ssh.*login.*fail|failed password for|authentication failure.*ssh"
+    ocsf_class_uid: 3002
+    ocsf_class_name: "SSH Activity"
+    activity_id: 1
+    activity_name: "Logon"
+    severity_id: 4
+    category_uid: 3
+    category_name: "Identity & Access Management"
+
+  - pattern: "sshd.*disconnect|ssh.*disconnect|connection closed by .*port"
+    ocsf_class_uid: 3002
+    ocsf_class_name: "SSH Activity"
+    activity_id: 2
+    activity_name: "Logoff"
+    severity_id: 1
+    category_uid: 3
+    category_name: "Identity & Access Management"
+
+  # ---- HTTP activity (OCSF class 4002) ----
+  - pattern: '"?GET /|method=GET|\bGET\b.*HTTP'
+    ocsf_class_uid: 4002
+    ocsf_class_name: "HTTP Activity"
+    activity_id: 1
+    activity_name: "GET"
+    severity_id: 1
+    category_uid: 4
+    category_name: "Network Activity"
+
+  - pattern: '"?POST /|method=POST|\bPOST\b.*HTTP'
+    ocsf_class_uid: 4002
+    ocsf_class_name: "HTTP Activity"
+    activity_id: 2
+    activity_name: "POST"
+    severity_id: 1
+    category_uid: 4
+    category_name: "Network Activity"
+
+  - pattern: 'status=[45]\d\d|HTTP/[0-9.]+" [45]\d\d|\b[45]\d\d (?:error|status)'
+    ocsf_class_uid: 4002
+    ocsf_class_name: "HTTP Activity"
+    activity_id: 0
+    activity_name: "Unknown"
+    severity_id: 4
+    category_uid: 4
+    category_name: "Network Activity"
+
+  # ---- Database (OCSF class 5001 - generic resource/datastore activity) ----
+  - pattern: "(?:db|database|connection).*(?:open|established|connected)|connecting to (?:db|database)"
+    ocsf_class_uid: 5001
+    ocsf_class_name: "Datastore Activity"
+    activity_id: 1
+    activity_name: "Open"
+    severity_id: 1
+    category_uid: 5
+    category_name: "Discovery"
+
+  - pattern: "(?:db|database|connection).*(?:close|closed|disconnected|released)"
+    ocsf_class_uid: 5001
+    ocsf_class_name: "Datastore Activity"
+    activity_id: 2
+    activity_name: "Close"
+    severity_id: 1
+    category_uid: 5
+    category_name: "Discovery"
+
+  - pattern: "(?:execut|run).*query|\\bquery\\b.*(?:took|ms|rows)|SELECT .*FROM|INSERT INTO|UPDATE .*SET"
+    ocsf_class_uid: 5001
+    ocsf_class_name: "Datastore Activity"
+    activity_id: 3
+    activity_name: "Query"
+    severity_id: 1
+    category_uid: 5
+    category_name: "Discovery"
+
+  # ---- Generic authentication (OCSF class 3002 Authentication) ----
+  - pattern: "auth.*fail|authentication failed|invalid credentials|unauthorized|permission denied"
+    ocsf_class_uid: 3002
+    ocsf_class_name: "Authentication"
+    activity_id: 1
+    activity_name: "Logon"
+    severity_id: 4
+    category_uid: 3
+    category_name: "Identity & Access Management"
+
+  - pattern: "auth.*success|authentication succeed|login success|user .*authenticated"
+    ocsf_class_uid: 3002
+    ocsf_class_name: "Authentication"
+    activity_id: 1
+    activity_name: "Logon"
+    severity_id: 1
+    category_uid: 3
+    category_name: "Identity & Access Management"
+
+  # ---- Service lifecycle (OCSF class 1007 - Application Lifecycle) ----
+  - pattern: "service .*(?:start|started|starting)|started service|systemd.*started|launching service"
+    ocsf_class_uid: 1007
+    ocsf_class_name: "Application Lifecycle"
+    activity_id: 1
+    activity_name: "Install"
+    severity_id: 1
+    category_uid: 1
+    category_name: "System Activity"
+
+  - pattern: "service .*(?:stop|stopped|stopping)|stopped service|systemd.*stopped|shutting down service"
+    ocsf_class_uid: 1007
+    ocsf_class_name: "Application Lifecycle"
+    activity_id: 4
+    activity_name: "Disable"
+    severity_id: 1
+    category_uid: 1
+    category_name: "System Activity"
