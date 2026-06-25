@@ -6,6 +6,8 @@ import re
 
 import yaml
 
+from ocsf_event_builder import OCSFEventBuilder
+
 _REQUIRED_FIELDS = (
     "ocsf_class_uid",
     "ocsf_class_name",
@@ -28,6 +30,7 @@ class OCSFNormalizer:
         self._yaml_path = yaml_path
         # Each entry: (compiled_regex, pattern_str, field_dict)
         self._rules: list[tuple[re.Pattern, str, dict]] = []
+        self._builder = OCSFEventBuilder()
         self._load()
 
     def _load(self) -> None:
@@ -49,6 +52,13 @@ class OCSFNormalizer:
                 result["matched_rule"] = pattern
                 return result
         return None
+
+    def normalize_full(self, raw_log: str, template: str) -> dict | None:
+        """Return a full OCSF 1.1 compliant event dict, or None if no rule matches."""
+        label = self.normalize(template)
+        if label is None:
+            return None
+        return self._builder.build(raw_log, label)
 
     def reload(self) -> None:
         """Re-read the YAML file and recompile all rules."""

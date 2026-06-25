@@ -124,3 +124,33 @@ rules:
     severity_id: 1
     category_uid: 1
     category_name: "System Activity"
+
+  # ---- Network connection (OCSF class 4001) ----
+  - pattern: "connection (?:established|accepted|opened)|new connection from|connect from"
+    ocsf_class_uid: 4001
+    ocsf_class_name: "Network Activity"
+    activity_id: 1
+    activity_name: "Open"
+    severity_id: 1
+    category_uid: 4
+    category_name: "Network Activity"
+
+  # ---- Process activity (OCSF class 1007 process start) ----
+  - pattern: "\\bspawned\\b|\\bforked\\b|child process|new process|pid[= ]\\d+"
+    ocsf_class_uid: 1007
+    ocsf_class_name: "Application Lifecycle"
+    activity_id: 1
+    activity_name: "Install"
+    severity_id: 1
+    category_uid: 1
+    category_name: "System Activity"
+
+  # ---- Error/exception (OCSF class 2001 — Security Finding) ----
+  - pattern: "\\bERROR\\b|\\bException\\b|\\bCRITICAL\\b|\\bFATAL\\b|\\bPANIC\\b"
+    ocsf_class_uid: 2001
+    ocsf_class_name: "Security Finding"
+    activity_id: 1
+    activity_name: "Create"
+    severity_id: 4
+    category_uid: 2
+    category_name: "Findings"

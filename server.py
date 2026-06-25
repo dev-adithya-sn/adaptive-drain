@@ -69,11 +69,12 @@ def upload():
     for line in lines:
         result = pipeline.ingest(line)
         results.append({
-            "log": line[:120],
+            "log":         line[:120],
             "change_type": result.get("change_type"),
-            "cluster_id": result.get("cluster_id"),
-            "template": result.get("template"),
-            "ocsf": result.get("ocsf"),
+            "cluster_id":  result.get("cluster_id"),
+            "template":    result.get("template"),
+            "ocsf":        result.get("ocsf"),
+            "ocsf_event":  result.get("ocsf_event"),
         })
 
     with _results_lock:
@@ -107,6 +108,21 @@ def respond_decision(decision_id):
         return jsonify({"error": "decision not found or timed out"}), 404
 
     return jsonify({"ok": True})
+
+
+@app.route("/events", methods=["GET"])
+def get_events():
+    """Return the last N full OCSF events from the most recent upload session."""
+    n = int(request.args.get("n", 50))
+    with _results_lock:
+        if not _results_store:
+            return jsonify({"events": []})
+        last_session = list(_results_store.values())[-1]
+        events = [
+            r["ocsf_event"] for r in last_session
+            if r.get("ocsf_event") is not None
+        ]
+    return jsonify({"events": events[-n:]})
 
 
 @app.route("/stats", methods=["GET"])

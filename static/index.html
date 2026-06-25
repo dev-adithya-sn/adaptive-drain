@@ -336,6 +336,82 @@
     .layout { grid-template-columns: 1fr; }
     .stats-grid { grid-template-columns: repeat(2, 1fr); }
   }
+
+  /* OCSF Events panel */
+  .events-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 10px;
+  }
+  .btn-view-events {
+    background: var(--accent);
+    color: #fff;
+    font-size: 11px;
+    padding: 4px 12px;
+    margin-left: auto;
+  }
+  #events-list { display: flex; flex-direction: column; gap: 6px; }
+
+  .ocsf-event-item {
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    overflow: hidden;
+  }
+  .ocsf-event-summary {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    background: #1e2133;
+    cursor: pointer;
+    user-select: none;
+    flex-wrap: wrap;
+  }
+  .ocsf-event-summary:hover { background: #22263a; }
+  .ocsf-class-name { font-weight: 600; font-size: 12px; }
+  .ocsf-type-name  { font-size: 11px; color: var(--muted); }
+
+  .sev-tag {
+    font-size: 10px; padding: 1px 6px; border-radius: 3px; font-weight: 600;
+  }
+  .sev-0 { background: rgba(107,114,128,0.2); color: var(--gray); }
+  .sev-1 { background: rgba(107,114,128,0.2); color: var(--gray); }
+  .sev-2 { background: rgba(34,197,94,0.15);  color: var(--green); }
+  .sev-3 { background: rgba(234,179,8,0.15);  color: var(--yellow); }
+  .sev-4 { background: rgba(239,68,68,0.15);  color: var(--red); }
+  .sev-5 { background: rgba(239,68,68,0.3);   color: #ff6b6b; }
+
+  .status-ok  { color: var(--green); font-size: 11px; font-weight: 600; }
+  .status-err { color: var(--red);   font-size: 11px; font-weight: 600; }
+  .status-unk { color: var(--gray);  font-size: 11px; font-weight: 600; }
+
+  .ocsf-arrow { margin-left: auto; color: var(--muted); font-size: 11px; transition: transform 0.15s; }
+  .ocsf-event-item.expanded .ocsf-arrow { transform: rotate(180deg); }
+
+  .ocsf-event-json {
+    background: #0a0c13;
+    border-top: 1px solid var(--border);
+    padding: 10px 12px;
+    font-family: 'SF Mono', 'Fira Code', monospace;
+    font-size: 11px;
+    color: #a0aec0;
+    overflow-x: auto;
+    overflow-y: auto;
+    white-space: pre;
+    display: none;
+    max-height: 280px;
+  }
+  .ocsf-event-item.expanded .ocsf-event-json { display: block; }
+
+  .ocsf-event-actions {
+    display: none;
+    justify-content: flex-end;
+    padding: 5px 10px;
+    border-top: 1px solid var(--border);
+    background: #161926;
+  }
+  .ocsf-event-item.expanded .ocsf-event-actions { display: flex; }
 </style>
 </head>
 <body>
@@ -384,6 +460,21 @@
           </thead>
           <tbody id="results-tbody"></tbody>
         </table>
+      </div>
+    </div>
+
+    <!-- OCSF Events Panel -->
+    <div class="card" id="events-card" style="display:none">
+      <div class="card-header">
+        <h2>OCSF Events</h2>
+        <span class="badge zero" id="events-badge">0</span>
+        <button class="btn btn-view-events" id="btn-view-events" onclick="loadEvents()">&#9881; View OCSF Events</button>
+      </div>
+      <div id="events-list">
+        <div class="empty-state" id="events-empty" style="display:none">
+          <div class="icon">&#128203;</div>
+          <div>No OCSF events matched</div>
+        </div>
       </div>
     </div>
 
@@ -473,6 +564,11 @@ async function uploadFile(file) {
     if (!res.ok) throw new Error(data.error || 'Upload failed');
     setStatus('Ingested ' + data.total + ' lines from ' + file.name, 'success');
     renderResults(data.results);
+    document.getElementById('events-card').style.display = '';
+    document.getElementById('events-list').querySelectorAll('.ocsf-event-item').forEach(el => el.remove());
+    document.getElementById('events-badge').textContent = '0';
+    document.getElementById('events-badge').className = 'badge zero';
+    if (document.getElementById('events-empty')) document.getElementById('events-empty').style.display = 'none';
   } catch (err) {
     setStatus(err.message, 'error');
   } finally {
@@ -845,6 +941,89 @@ function esc(str) {
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;');
+}
+
+// ──────────────────────────────────────────────
+// OCSF Events
+// ──────────────────────────────────────────────
+async function loadEvents() {
+  const btn = document.getElementById('btn-view-events');
+  if (btn) { btn.disabled = true; btn.textContent = 'Loading…'; }
+  try {
+    const res = await fetch('/events?n=50');
+    if (!res.ok) throw new Error('Failed to load events');
+    const { events } = await res.json();
+    renderEvents(events);
+  } catch (err) {
+    alert(err.message);
+  } finally {
+    if (btn) { btn.disabled = false; btn.innerHTML = '&#9881; View OCSF Events'; }
+  }
+}
+
+function renderEvents(events) {
+  const list  = document.getElementById('events-list');
+  const badge = document.getElementById('events-badge');
+  const empty = document.getElementById('events-empty');
+
+  list.querySelectorAll('.ocsf-event-item').forEach(el => el.remove());
+  badge.textContent = events.length;
+  badge.className = 'badge' + (events.length === 0 ? ' zero' : '');
+
+  if (events.length === 0) {
+    if (empty) empty.style.display = '';
+    return;
+  }
+  if (empty) empty.style.display = 'none';
+  events.forEach((ev, i) => list.appendChild(buildEventItem(ev, i)));
+}
+
+function buildEventItem(ev, idx) {
+  const className = ev.class_name  || '—';
+  const typeName  = ev.type_name   || '—';
+  const sevId     = ev.severity_id || 0;
+  const sevName   = ev.severity    || 'Unknown';
+  const status    = ev.status      || '';
+  const statusId  = ev.status_id;
+
+  const statusClass = statusId === 1 ? 'status-ok' : statusId === 2 ? 'status-err' : 'status-unk';
+  const sevClass    = 'sev-' + Math.min(Math.max(sevId, 0), 5);
+  const json        = JSON.stringify(ev, null, 2);
+
+  const item = document.createElement('div');
+  item.className = 'ocsf-event-item';
+  item.innerHTML = `
+    <div class="ocsf-event-summary" onclick="toggleEvent(this.parentElement)">
+      <span class="ocsf-class-name">${esc(className)}</span>
+      <span class="ocsf-type-name">${esc(typeName)}</span>
+      <span class="sev-tag ${sevClass}">${esc(sevName)}</span>
+      ${status ? `<span class="${statusClass}">${esc(status)}</span>` : ''}
+      <span class="ocsf-arrow">&#9660;</span>
+    </div>
+    <pre class="ocsf-event-json">${esc(json)}</pre>
+    <div class="ocsf-event-actions">
+      <button class="btn btn-cancel" style="font-size:11px;padding:3px 10px;"
+              onclick="copyEvent(this)">&#128203; Copy</button>
+    </div>
+  `;
+  return item;
+}
+
+function toggleEvent(item) {
+  item.classList.toggle('expanded');
+}
+
+async function copyEvent(btn) {
+  const pre = btn.closest('.ocsf-event-item').querySelector('.ocsf-event-json');
+  if (!pre) return;
+  try {
+    await navigator.clipboard.writeText(pre.textContent);
+    btn.textContent = '✓ Copied';
+    setTimeout(() => { btn.innerHTML = '&#128203; Copy'; }, 1500);
+  } catch (_) {
+    btn.textContent = 'Copy failed';
+    setTimeout(() => { btn.innerHTML = '&#128203; Copy'; }, 1500);
+  }
 }
 
 // ──────────────────────────────────────────────

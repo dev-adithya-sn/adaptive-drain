@@ -106,11 +106,15 @@ class TemplatePipeline:
 
         # OCSF normalization (optional): attach event classification to the result.
         if self.normalizer is not None:
-            ocsf = self.normalizer.normalize(template)
-            result["ocsf"] = ocsf
-            self._bump("ocsf_matched" if ocsf is not None else "ocsf_unmatched")
+            ocsf_label = self.normalizer.normalize(template)
+            ocsf_full  = self.normalizer.normalize_full(raw_log, template) \
+                         if ocsf_label else None
+            result["ocsf"]       = ocsf_label
+            result["ocsf_event"] = ocsf_full
+            self._bump("ocsf_matched" if ocsf_label is not None else "ocsf_unmatched")
         else:
-            result["ocsf"] = None
+            result["ocsf"]       = None
+            result["ocsf_event"] = None
 
         return result
 

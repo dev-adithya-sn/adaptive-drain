@@ -8,6 +8,7 @@ from normalizer import OCSFNormalizer
 from persistence import StatePersistence
 from metrics import MetricsCollector
 from approver import HumanApprover, WebApprover
+from ocsf_event_builder import OCSFEventBuilder
 
 __all__ = [
     "TemplatePipeline",
@@ -21,4 +22,5 @@ __all__ = [
     "MetricsCollector",
     "HumanApprover",
     "WebApprover",
+    "OCSFEventBuilder",
 ]
