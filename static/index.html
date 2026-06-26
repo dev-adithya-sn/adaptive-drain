@@ -538,7 +538,10 @@
         <h2>Ingestion Results</h2>
         <span class="badge zero" id="results-count">0</span>
       </div>
-      <div id="results-session-line" style="display:none;font-size:11px;color:var(--muted);padding:0 0 10px 0;letter-spacing:0.2px;"></div>
+      <div id="results-session-line" style="display:none;font-size:11px;color:var(--muted);padding:0 0 10px 0;letter-spacing:0.2px;align-items:center;gap:8px;">
+        <span id="results-session-text"></span>
+        <button onclick="clearResults()" style="background:transparent;color:#6b7280;border:none;cursor:pointer;font-size:0.85em;padding:0 2px;">&#10005; Clear</button>
+      </div>
       <div class="table-wrap">
         <table>
           <thead>
@@ -716,18 +719,20 @@ async function uploadFile(file) {
 let _resultsData = [];
 
 function renderResults(results, sessionId) {
+  _resultsData = [];
   _resultsData = results;
   const tbody     = document.getElementById('results-tbody');
   const count     = document.getElementById('results-count');
   const sessionEl = document.getElementById('results-session-line');
+  const sessionTx = document.getElementById('results-session-text');
 
   count.textContent = results.length;
   count.className   = results.length > 0 ? 'badge' : 'badge zero';
 
   const shortId = sessionId ? sessionId.substring(0, 8) + '…' : '';
-  if (sessionEl) {
-    sessionEl.textContent = `Session: ${shortId} — ${results.length} log${results.length !== 1 ? 's' : ''}`;
-    sessionEl.style.display = sessionId ? '' : 'none';
+  if (sessionEl && sessionTx) {
+    sessionTx.textContent = `Session: ${shortId} — ${results.length} log${results.length !== 1 ? 's' : ''}`;
+    sessionEl.style.display = sessionId ? 'flex' : 'none';
   }
 
   tbody.innerHTML = '';
@@ -760,6 +765,11 @@ function renderResults(results, sessionId) {
     emptyTr.innerHTML = `<td colspan="6" class="empty-state" style="padding:32px 0;">No logs ingested yet. Drop a log file to get started.</td>`;
     tbody.appendChild(emptyTr);
   }
+}
+
+function clearResults() {
+  currentSessionId = null;
+  renderResults([], null);
 }
 
 // ──────────────────────────────────────────────

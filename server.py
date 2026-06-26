@@ -68,15 +68,14 @@ def upload():
     results = []
     for line in lines:
         result = pipeline.ingest(line)
-        managed = pipeline.store.get(str(result.get("cluster_id") or ""))
         results.append({
             "log":              line[:120],
             "change_type":      result.get("change_type"),
             "cluster_id":       result.get("cluster_id"),
             "template":         result.get("template"),
-            "labeled_template": managed.labeled_template if managed else None,
-            "llm_decision":     managed.llm_decision    if managed else None,
-            "llm_reasoning":    managed.llm_reasoning   if managed else None,
+            "labeled_template": None,
+            "llm_decision":     None,
+            "llm_reasoning":    None,
             "ocsf":             result.get("ocsf"),
             "ocsf_event":       result.get("ocsf_event"),
         })
