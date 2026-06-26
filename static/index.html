@@ -533,11 +533,12 @@
     </div>
 
     <!-- Results Panel -->
-    <div class="card" id="results-card" style="display:none">
+    <div class="card" id="results-card">
       <div class="card-header">
         <h2>Ingestion Results</h2>
-        <span class="badge" id="results-count">0</span>
+        <span class="badge zero" id="results-count">0</span>
       </div>
+      <div id="results-session-line" style="display:none;font-size:11px;color:var(--muted);padding:0 0 10px 0;letter-spacing:0.2px;"></div>
       <div class="table-wrap">
         <table>
           <thead>
@@ -550,7 +551,13 @@
               <th>Labeled Template</th>
             </tr>
           </thead>
-          <tbody id="results-tbody"></tbody>
+          <tbody id="results-tbody">
+            <tr id="results-empty-row">
+              <td colspan="6" class="empty-state" style="padding:32px 0;">
+                No logs ingested yet. Drop a log file to get started.
+              </td>
+            </tr>
+          </tbody>
         </table>
       </div>
     </div>
@@ -638,6 +645,9 @@
         <div class="store-cell pending"><div class="store-label">Pending Merge</div><div class="store-val" id="ts-pending_merge">—</div></div>
         <div class="store-cell merged"><div class="store-label">Merged</div><div class="store-val" id="ts-merged">—</div></div>
       </div>
+      <div style="margin-top:12px;font-size:11px;color:var(--muted);border-top:1px solid var(--border);padding-top:10px;">
+        Counters are cumulative across all sessions.
+      </div>
     </div>
 
   </div>
@@ -669,6 +679,8 @@ function setStatus(msg, type) {
   statusEl.className = type || '';
 }
 
+let currentSessionId = null;
+
 async function uploadFile(file) {
   setStatus('Uploading ' + file.name + '…');
   spinner.classList.add('visible');
@@ -681,7 +693,8 @@ async function uploadFile(file) {
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'Upload failed');
     setStatus('Ingested ' + data.total + ' lines from ' + file.name, 'success');
-    renderResults(data.results);
+    currentSessionId = data.session_id;
+    renderResults(data.results, data.session_id);
     document.getElementById('tlib-card').style.display = '';
     document.getElementById('events-card').style.display = '';
     document.getElementById('events-list').querySelectorAll('.ocsf-event-item').forEach(el => el.remove());
@@ -702,16 +715,23 @@ async function uploadFile(file) {
 // ──────────────────────────────────────────────
 let _resultsData = [];
 
-function renderResults(results) {
+function renderResults(results, sessionId) {
   _resultsData = results;
-  const card  = document.getElementById('results-card');
-  const tbody = document.getElementById('results-tbody');
-  const count = document.getElementById('results-count');
+  const tbody     = document.getElementById('results-tbody');
+  const count     = document.getElementById('results-count');
+  const sessionEl = document.getElementById('results-session-line');
 
   count.textContent = results.length;
+  count.className   = results.length > 0 ? 'badge' : 'badge zero';
+
+  const shortId = sessionId ? sessionId.substring(0, 8) + '…' : '';
+  if (sessionEl) {
+    sessionEl.textContent = `Session: ${shortId} — ${results.length} log${results.length !== 1 ? 's' : ''}`;
+    sessionEl.style.display = sessionId ? '' : 'none';
+  }
+
   tbody.innerHTML = '';
   collapseDetailRow();
-  card.style.display = '';
 
   results.forEach((r, i) => {
     const tr = document.createElement('tr');
@@ -733,6 +753,13 @@ function renderResults(results) {
     tr.addEventListener('click', () => handleDetailRowClick(tr, r, 6));
     tbody.appendChild(tr);
   });
+
+  if (results.length === 0) {
+    const emptyTr = document.createElement('tr');
+    emptyTr.id = 'results-empty-row';
+    emptyTr.innerHTML = `<td colspan="6" class="empty-state" style="padding:32px 0;">No logs ingested yet. Drop a log file to get started.</td>`;
+    tbody.appendChild(emptyTr);
+  }
 }
 
 // ──────────────────────────────────────────────
