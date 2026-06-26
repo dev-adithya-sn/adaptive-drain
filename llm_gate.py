@@ -18,6 +18,34 @@ _FALLBACK_KEEP_DEGRADATION: dict = {
     "reasoning": "llm_error",
 }
 
+_LABEL_VOCAB = {
+    "<ip>", "<port>", "<user>", "<username>", "<password>",
+    "<auth_method>", "<host>", "<hostname>", "<domain>", "<url>",
+    "<path>", "<method>", "<status_code>", "<bytes>", "<duration>",
+    "<timestamp>", "<date>", "<time_val>", "<pid>", "<process>",
+    "<service>", "<table>", "<database>", "<query>", "<rows>",
+    "<key>", "<value>", "<id>", "<hash>", "<email>", "<phone>",
+    "<count>", "<size>", "<level>", "<message>", "<error>", "<unknown>",
+}
+
+_WILDCARD_LABELING_INSTRUCTION = """\
+Wildcard labeling rules:
+- The template uses <*> as a placeholder for variable values.
+- For labeled_template: copy the template exactly but replace each <*> \
+with the most specific semantic label from this vocabulary:
+  <ip>, <port>, <user>, <username>, <password>, <auth_method>,
+  <host>, <hostname>, <domain>, <url>, <path>, <method>,
+  <status_code>, <bytes>, <duration>, <timestamp>, <date>, <time_val>,
+  <pid>, <process>, <service>, <table>, <database>, <query>,
+  <rows>, <key>, <value>, <id>, <hash>, <email>, <phone>,
+  <count>, <size>, <level>, <message>, <error>, <unknown>
+- Use context from the sample logs to determine each position's type.
+- If a position varies and doesn't fit any label, use <unknown>.
+- labeled_template must have the same number of placeholders as the \
+original template (count of <*> must equal count of <label> tokens).
+- Non-wildcard tokens must remain exactly as they appear in the template.
+"""
+
 
 class LLMGate:
     """Sends template decisions to an OpenRouter-hosted LLM and parses the JSON reply."""
@@ -60,9 +88,11 @@ class LLMGate:
             "    same event type and merging them would reduce noise without losing specificity.\n"
             "  - Provide a merged_template that generalises both using '<*>' for variable tokens.\n"
             "  - If no good merge exists, choose 'keep'.\n\n"
+            f"{_WILDCARD_LABELING_INSTRUCTION}\n"
             "Respond ONLY with valid JSON in this exact shape (no markdown, no extra text):\n"
             '{"decision": "merge" | "keep", "target_cluster_id": "string or null", '
-            '"merged_template": "string or null", "reasoning": "string"}'
+            '"merged_template": "string or null", '
+            '"labeled_template": "string — template with named wildcards", "reasoning": "string"}'
         )
 
     def build_prompt_degradation(
@@ -84,17 +114,19 @@ class LLMGate:
             "  'reset'  — the samples ARE the same event type but the template is too broad.\n"
             "             Provide a tighter reset_template string using '<*>' only where needed.\n"
             "  'keep'   — the wildcard ratio is acceptable given the sample diversity.\n\n"
+            f"{_WILDCARD_LABELING_INSTRUCTION}\n"
             "Respond ONLY with valid JSON in this exact shape (no markdown, no extra text):\n"
             '{"decision": "split" | "reset" | "keep", "sub_templates": ["string"] or [], '
-            '"reset_template": "string or null", "reasoning": "string"}'
+            '"reset_template": "string or null", '
+            '"labeled_template": "string — template with named wildcards", "reasoning": "string"}'
         )
 
     # ------------------------------------------------------------------
     # API call
     # ------------------------------------------------------------------
 
-    def call(self, prompt: str) -> dict:
-        """POST prompt to OpenRouter and return the parsed JSON decision dict.
+    def call(self, prompt: str, original_template: str = "") -> dict:
+        """POST prompt to the LLM and return the parsed JSON decision dict.
 
         Never raises — returns a safe 'keep' fallback on any error.
         """
@@ -104,7 +136,7 @@ class LLMGate:
                 {"role": "system", "content": "Respond only in JSON."},
                 {"role": "user", "content": prompt},
             ],
-            "max_tokens": 500,
+            "max_tokens": 600,
             "temperature": 0,
         }
         try:
@@ -113,10 +145,49 @@ class LLMGate:
             resp.raise_for_status()
             data = resp.json()
             content: str = data["choices"][0]["message"]["content"]
-            return self._parse_json(content)
+            result = self._parse_json(content)
+            if original_template:
+                result = self._apply_labeled_template(result, original_template)
+            return result
         except Exception as exc:
             print(f"[LLMGate] error: {exc}")
             return dict(_FALLBACK_KEEP)
+
+    def validate_labeled_template(self, original: str, labeled: str) -> bool:
+        """Verify labeled_template has same token count and same non-wildcard tokens.
+
+        Returns True if valid, False on any mismatch or error.
+        """
+        try:
+            orig_tokens    = original.split()
+            labeled_tokens = labeled.split()
+
+            if len(orig_tokens) != len(labeled_tokens):
+                return False
+
+            for orig, lab in zip(orig_tokens, labeled_tokens):
+                if orig == "<*>":
+                    if lab not in _LABEL_VOCAB:
+                        return False
+                else:
+                    if orig != lab:
+                        return False
+
+            return True
+        except Exception:
+            return False
+
+    def _apply_labeled_template(self, decision: dict, original_template: str) -> dict:
+        """Validate and attach labeled_template to decision. Fallback on failure."""
+        try:
+            labeled = decision.get("labeled_template", "")
+            if labeled and self.validate_labeled_template(original_template, labeled):
+                decision["labeled_template"] = labeled
+            else:
+                decision["labeled_template"] = original_template.replace("<*>", "<unknown>")
+        except Exception:
+            decision["labeled_template"] = original_template.replace("<*>", "<unknown>")
+        return decision
 
     def _parse_json(self, text: str) -> dict:
         """Strip markdown fences then parse JSON; return keep-fallback on failure."""

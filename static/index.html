@@ -337,6 +337,42 @@
     .stats-grid { grid-template-columns: repeat(2, 1fr); }
   }
 
+  /* Semantic label tokens */
+  .label-token {
+    background: #1e293b;
+    color: #818cf8;
+    border-radius: 4px;
+    padding: 2px 6px;
+    font-size: 0.8em;
+    font-family: 'SF Mono', 'Fira Code', monospace;
+    white-space: nowrap;
+  }
+
+  /* Template Library panel */
+  .tlib-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 10px;
+  }
+  .btn-load-templates {
+    background: var(--accent);
+    color: #fff;
+    font-size: 11px;
+    padding: 4px 12px;
+    margin-left: auto;
+  }
+  #tlib-list { overflow-y: auto; max-height: 360px; border-radius: 6px; border: 1px solid var(--border); }
+  #tlib-list table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  #tlib-list th {
+    background: #13151f; color: var(--muted); text-align: left;
+    padding: 7px 10px; font-weight: 500; position: sticky; top: 0;
+    border-bottom: 1px solid var(--border);
+  }
+  #tlib-list td { padding: 6px 10px; border-bottom: 1px solid #1e2133; vertical-align: top; }
+  #tlib-list tr:last-child td { border-bottom: none; }
+  #tlib-list tr:hover td { background: rgba(255,255,255,0.02); }
+
   /* OCSF Events panel */
   .events-toolbar {
     display: flex;
@@ -456,9 +492,36 @@
               <th>Cluster</th>
               <th>OCSF Class</th>
               <th>Template</th>
+              <th>Labeled Template</th>
             </tr>
           </thead>
           <tbody id="results-tbody"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Template Library Panel -->
+    <div class="card" id="tlib-card" style="display:none">
+      <div class="card-header">
+        <h2>Template Library</h2>
+        <span class="badge zero" id="tlib-badge">0</span>
+        <button class="btn btn-load-templates" id="btn-load-templates" onclick="loadTemplates()">&#9881; Load Templates</button>
+      </div>
+      <div id="tlib-empty" class="empty-state" style="display:none">
+        <div class="icon">&#128203;</div>
+        <div>No active templates</div>
+      </div>
+      <div id="tlib-list" style="display:none">
+        <table>
+          <thead>
+            <tr>
+              <th>Cluster</th>
+              <th>Pattern</th>
+              <th>Labeled Template</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody id="tlib-tbody"></tbody>
         </table>
       </div>
     </div>
@@ -564,6 +627,7 @@ async function uploadFile(file) {
     if (!res.ok) throw new Error(data.error || 'Upload failed');
     setStatus('Ingested ' + data.total + ' lines from ' + file.name, 'success');
     renderResults(data.results);
+    document.getElementById('tlib-card').style.display = '';
     document.getElementById('events-card').style.display = '';
     document.getElementById('events-list').querySelectorAll('.ocsf-event-item').forEach(el => el.remove());
     document.getElementById('events-badge').textContent = '0';
@@ -592,15 +656,19 @@ function renderResults(results) {
 
   results.forEach((r, i) => {
     const tr = document.createElement('tr');
-    const ocsf = r.ocsf ? (r.ocsf.class_name || r.ocsf.class_uid || JSON.stringify(r.ocsf)) : '—';
+    const ocsf = r.ocsf ? (r.ocsf.ocsf_class_name || r.ocsf.class_name || r.ocsf.class_uid || JSON.stringify(r.ocsf)) : '—';
     const tpl  = (r.template || '').substring(0, 60) + ((r.template || '').length > 60 ? '…' : '');
     const ct   = r.change_type || 'NONE';
+    const labeledCell = r.labeled_template
+      ? `<span title="${esc(r.labeled_template)}">${formatLabeledTemplate(r.labeled_template, 80)}</span>`
+      : '<span style="color:var(--muted);font-size:11px;">pending…</span>';
     tr.innerHTML = `
       <td class="mono">${i + 1}</td>
       <td><span class="ct ct-${ct}">${ct}</span></td>
       <td class="mono">${r.cluster_id || '—'}</td>
       <td>${ocsf}</td>
       <td><span class="mono trunc" title="${esc(r.template || '')}">${esc(tpl)}</span></td>
+      <td>${labeledCell}</td>
     `;
     tbody.appendChild(tr);
   });
@@ -941,6 +1009,82 @@ function esc(str) {
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;');
+}
+
+// ──────────────────────────────────────────────
+// Label rendering utility
+// ──────────────────────────────────────────────
+function formatLabeledTemplate(tpl, maxLen) {
+  if (!tpl) return '—';
+  let display = tpl;
+  if (maxLen && display.length > maxLen) display = display.substring(0, maxLen) + '…';
+  // Escape then style <label> tokens (they appear as &lt;word&gt; after escaping)
+  return esc(display).replace(/&lt;(\w+)&gt;/g,
+    '<span class="label-token">&lt;$1&gt;</span>');
+}
+
+// ──────────────────────────────────────────────
+// Template Library
+// ──────────────────────────────────────────────
+let _tlibRefreshTimer = null;
+
+async function loadTemplates() {
+  const btn = document.getElementById('btn-load-templates');
+  if (btn) { btn.disabled = true; btn.textContent = 'Loading…'; }
+  try {
+    const res = await fetch('/templates');
+    if (!res.ok) throw new Error('Failed to load templates');
+    const { templates } = await res.json();
+    renderTemplates(templates);
+  } catch (err) {
+    alert(err.message);
+  } finally {
+    if (btn) { btn.disabled = false; btn.innerHTML = '&#9881; Load Templates'; }
+  }
+}
+
+function renderTemplates(templates) {
+  const tbody  = document.getElementById('tlib-tbody');
+  const badge  = document.getElementById('tlib-badge');
+  const empty  = document.getElementById('tlib-empty');
+  const list   = document.getElementById('tlib-list');
+
+  badge.textContent = templates.length;
+  badge.className = 'badge' + (templates.length === 0 ? ' zero' : '');
+
+  if (templates.length === 0) {
+    list.style.display = 'none';
+    empty.style.display = '';
+    return;
+  }
+  empty.style.display = 'none';
+  list.style.display = '';
+
+  tbody.innerHTML = '';
+  templates.forEach(t => {
+    const tr = document.createElement('tr');
+    const labeledCell = t.labeled_template
+      ? formatLabeledTemplate(t.labeled_template, 0)
+      : '<span style="color:var(--muted)">—</span>';
+    tr.innerHTML = `
+      <td class="mono" style="white-space:nowrap">${esc(t.cluster_id)}</td>
+      <td class="mono" style="font-size:11px;color:var(--muted)">${esc(t.pattern)}</td>
+      <td style="font-size:12px">${labeledCell}</td>
+      <td><span class="ct ct-${t.status === 'ACTIVE' ? 'CREATE' : 'NONE'}" style="font-size:10px">${esc(t.status)}</span></td>
+    `;
+    tbody.appendChild(tr);
+  });
+
+  // start auto-refresh if not already running
+  if (!_tlibRefreshTimer) {
+    _tlibRefreshTimer = setInterval(loadTemplates, 10000);
+  }
+}
+
+// Stop auto-refresh when tlib-card is hidden
+function hideTlib() {
+  clearInterval(_tlibRefreshTimer);
+  _tlibRefreshTimer = null;
 }
 
 // ──────────────────────────────────────────────

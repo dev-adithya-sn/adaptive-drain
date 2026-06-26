@@ -22,6 +22,7 @@ class ManagedTemplate:
     merge_target_id: str | None = None
     confirmation_count: int = 0
     created_at: float = field(default_factory=time.time)
+    labeled_template: str | None = None
 
 
 class TemplateStore:

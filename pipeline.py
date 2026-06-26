@@ -152,7 +152,7 @@ class TemplatePipeline:
         candidates = self.llm_gate.find_candidates(item["template"], active_dicts)
         prompt = self.llm_gate.build_prompt_create(item["template"], item["samples"], candidates)
         self._bump("llm_calls")
-        decision = self.llm_gate.call(prompt)
+        decision = self.llm_gate.call(prompt, original_template=item["template"])
 
         if self.approver is not None:
             decision = self.approver.review(item, decision)
@@ -167,6 +167,12 @@ class TemplatePipeline:
             self._bump("llm_errors")
         if decision.get("decision") == "keep":
             self._bump("llm_fallback_keep")
+
+        labeled = decision.get("labeled_template")
+        if labeled:
+            cluster = self.store.get(item["cluster_id"])
+            if cluster:
+                cluster.labeled_template = labeled
 
         if decision.get("decision") == "merge":
             target_id: str | None = decision.get("target_cluster_id")
@@ -183,7 +189,7 @@ class TemplatePipeline:
             item["template"], item["wildcard_ratio"], item["samples"]
         )
         self._bump("llm_calls")
-        decision = self.llm_gate.call(prompt)
+        decision = self.llm_gate.call(prompt, original_template=item["template"])
 
         if self.approver is not None:
             decision = self.approver.review(item, decision)
@@ -215,6 +221,9 @@ class TemplatePipeline:
                 managed = self.store.get(item["cluster_id"])
                 if managed is not None:
                     managed.pattern = reset_template
+                    labeled = decision.get("labeled_template")
+                    if labeled:
+                        managed.labeled_template = labeled
 
     # ------------------------------------------------------------------
     # Observability

@@ -35,6 +35,7 @@ class StatePersistence:
                     "merge_target_id": t.merge_target_id,
                     "confirmation_count": t.confirmation_count,
                     "created_at": t.created_at,
+                    "labeled_template": t.labeled_template,
                 }
                 for t in store._store.values()
             ]
@@ -81,6 +82,7 @@ class StatePersistence:
                 managed.merge_target_id = t["merge_target_id"]
                 managed.confirmation_count = t["confirmation_count"]
                 managed.created_at = t["created_at"]
+                managed.labeled_template = t.get("labeled_template")
 
             sampler._reservoirs = {cid: list(logs) for cid, logs in payload.get("reservoirs", {}).items()}
             sampler._counts = dict(payload.get("reservoir_counts", {}))

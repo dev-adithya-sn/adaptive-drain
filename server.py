@@ -68,13 +68,16 @@ def upload():
     results = []
     for line in lines:
         result = pipeline.ingest(line)
+        managed = pipeline.store.get(str(result.get("cluster_id") or ""))
+        labeled = managed.labeled_template if managed else None
         results.append({
-            "log":         line[:120],
-            "change_type": result.get("change_type"),
-            "cluster_id":  result.get("cluster_id"),
-            "template":    result.get("template"),
-            "ocsf":        result.get("ocsf"),
-            "ocsf_event":  result.get("ocsf_event"),
+            "log":              line[:120],
+            "change_type":      result.get("change_type"),
+            "cluster_id":       result.get("cluster_id"),
+            "template":         result.get("template"),
+            "labeled_template": labeled,
+            "ocsf":             result.get("ocsf"),
+            "ocsf_event":       result.get("ocsf_event"),
         })
 
     with _results_lock:
@@ -108,6 +111,21 @@ def respond_decision(decision_id):
         return jsonify({"error": "decision not found or timed out"}), 404
 
     return jsonify({"ok": True})
+
+
+@app.route("/templates", methods=["GET"])
+def get_templates():
+    """Return all active templates with their labeled versions."""
+    templates = []
+    for t in pipeline.store.all_active():
+        templates.append({
+            "cluster_id":       t.cluster_id,
+            "pattern":          t.pattern,
+            "labeled_template": t.labeled_template,
+            "status":           t.status.value,
+            "created_at":       t.created_at,
+        })
+    return jsonify({"templates": templates})
 
 
 @app.route("/events", methods=["GET"])
