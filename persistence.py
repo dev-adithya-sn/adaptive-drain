@@ -36,6 +36,8 @@ class StatePersistence:
                     "confirmation_count": t.confirmation_count,
                     "created_at": t.created_at,
                     "labeled_template": t.labeled_template,
+                    "llm_decision":     t.llm_decision,
+                    "llm_reasoning":    t.llm_reasoning,
                 }
                 for t in store._store.values()
             ]
@@ -83,6 +85,8 @@ class StatePersistence:
                 managed.confirmation_count = t["confirmation_count"]
                 managed.created_at = t["created_at"]
                 managed.labeled_template = t.get("labeled_template")
+                managed.llm_decision    = t.get("llm_decision")
+                managed.llm_reasoning   = t.get("llm_reasoning")
 
             sampler._reservoirs = {cid: list(logs) for cid, logs in payload.get("reservoirs", {}).items()}
             sampler._counts = dict(payload.get("reservoir_counts", {}))

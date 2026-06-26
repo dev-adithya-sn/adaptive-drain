@@ -69,13 +69,14 @@ def upload():
     for line in lines:
         result = pipeline.ingest(line)
         managed = pipeline.store.get(str(result.get("cluster_id") or ""))
-        labeled = managed.labeled_template if managed else None
         results.append({
             "log":              line[:120],
             "change_type":      result.get("change_type"),
             "cluster_id":       result.get("cluster_id"),
             "template":         result.get("template"),
-            "labeled_template": labeled,
+            "labeled_template": managed.labeled_template if managed else None,
+            "llm_decision":     managed.llm_decision    if managed else None,
+            "llm_reasoning":    managed.llm_reasoning   if managed else None,
             "ocsf":             result.get("ocsf"),
             "ocsf_event":       result.get("ocsf_event"),
         })
@@ -122,10 +123,19 @@ def get_templates():
             "cluster_id":       t.cluster_id,
             "pattern":          t.pattern,
             "labeled_template": t.labeled_template,
+            "llm_decision":     t.llm_decision,
+            "llm_reasoning":    t.llm_reasoning,
             "status":           t.status.value,
             "created_at":       t.created_at,
         })
     return jsonify({"templates": templates})
+
+
+@app.route("/templates/<cluster_id>/samples", methods=["GET"])
+def get_samples(cluster_id):
+    """Return up to 5 sample logs for a cluster from the reservoir."""
+    samples = pipeline.sampler.get(cluster_id)[:5]
+    return jsonify({"cluster_id": cluster_id, "samples": samples})
 
 
 @app.route("/events", methods=["GET"])

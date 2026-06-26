@@ -168,11 +168,12 @@ class TemplatePipeline:
         if decision.get("decision") == "keep":
             self._bump("llm_fallback_keep")
 
-        labeled = decision.get("labeled_template")
-        if labeled:
-            cluster = self.store.get(item["cluster_id"])
-            if cluster:
-                cluster.labeled_template = labeled
+        cluster = self.store.get(item["cluster_id"])
+        if cluster:
+            if decision.get("labeled_template"):
+                cluster.labeled_template = decision["labeled_template"]
+            cluster.llm_decision  = decision.get("decision")
+            cluster.llm_reasoning = decision.get("reasoning")
 
         if decision.get("decision") == "merge":
             target_id: str | None = decision.get("target_cluster_id")
@@ -202,6 +203,11 @@ class TemplatePipeline:
 
         if decision.get("reasoning") == "llm_error":
             self._bump("llm_errors")
+
+        deg_cluster = self.store.get(item["cluster_id"])
+        if deg_cluster:
+            deg_cluster.llm_decision  = decision.get("decision")
+            deg_cluster.llm_reasoning = decision.get("reasoning")
 
         if decision.get("decision") == "split":
             new_ids = self.splitter.execute_split(

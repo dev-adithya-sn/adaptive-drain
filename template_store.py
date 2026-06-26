@@ -23,6 +23,8 @@ class ManagedTemplate:
     confirmation_count: int = 0
     created_at: float = field(default_factory=time.time)
     labeled_template: str | None = None
+    llm_decision:     str | None = None
+    llm_reasoning:    str | None = None
 
 
 class TemplateStore:

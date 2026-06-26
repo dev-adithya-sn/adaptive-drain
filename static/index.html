@@ -373,6 +373,61 @@
   #tlib-list tr:last-child td { border-bottom: none; }
   #tlib-list tr:hover td { background: rgba(255,255,255,0.02); }
 
+  /* Detail panel (inline row expansion) */
+  tr.row-selected > td { border-left: 3px solid var(--accent); }
+  tr.detail-row > td { padding: 0; background: #0d0f1a; border-left: 3px solid var(--accent); }
+  .detail-panel {
+    padding: 14px 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    border-top: 1px solid var(--accent);
+  }
+  .detail-section-title {
+    font-size: 10px; font-weight: 600; color: var(--muted);
+    text-transform: uppercase; letter-spacing: 0.6px; margin-bottom: 6px;
+  }
+  .tpl-evolution {
+    background: #0a0c13; border: 1px solid var(--border); border-radius: 6px;
+    padding: 10px 14px; display: flex; flex-direction: column; gap: 8px;
+    font-family: 'SF Mono', 'Fira Code', monospace; font-size: 12px;
+  }
+  .tpl-evo-row { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
+  .tpl-evo-label {
+    color: var(--muted); font-size: 10px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: 0.4px;
+    min-width: 58px; font-family: 'Inter', system-ui, sans-serif;
+  }
+  .tok-wildcarded {
+    background: rgba(234,179,8,0.12); color: var(--yellow);
+    border-radius: 3px; padding: 0 3px;
+  }
+  .samples-list-detail { display: flex; flex-direction: column; gap: 4px; }
+  .sample-entry {
+    display: flex; align-items: center; gap: 8px; padding: 5px 10px;
+    background: #0a0c13; border: 1px solid var(--border); border-radius: 4px;
+    font-family: 'SF Mono', 'Fira Code', monospace; font-size: 11px;
+    color: var(--muted); cursor: default;
+  }
+  .sample-entry:hover { background: #12141e; border-color: #3a3d52; }
+  .sample-text { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sample-copy-btn {
+    background: none; border: none; color: var(--muted); cursor: pointer;
+    opacity: 0; padding: 2px 4px; font-size: 12px;
+    transition: opacity 0.1s; flex-shrink: 0;
+  }
+  .sample-entry:hover .sample-copy-btn { opacity: 1; }
+  .llm-detail-box {
+    background: #0a0c13; border: 1px solid var(--border); border-radius: 6px;
+    padding: 10px 14px; display: flex; flex-direction: column; gap: 7px;
+  }
+  .llm-detail-row { display: flex; gap: 10px; align-items: flex-start; }
+  .llm-detail-key {
+    color: var(--muted); font-size: 11px; font-weight: 500;
+    min-width: 72px; padding-top: 1px; flex-shrink: 0;
+  }
+  .llm-detail-val { font-size: 12px; color: var(--text); }
+
   /* OCSF Events panel */
   .events-toolbar {
     display: flex;
@@ -645,17 +700,22 @@ async function uploadFile(file) {
 // ──────────────────────────────────────────────
 // Results table
 // ──────────────────────────────────────────────
+let _resultsData = [];
+
 function renderResults(results) {
+  _resultsData = results;
   const card  = document.getElementById('results-card');
   const tbody = document.getElementById('results-tbody');
   const count = document.getElementById('results-count');
 
   count.textContent = results.length;
   tbody.innerHTML = '';
+  collapseDetailRow();
   card.style.display = '';
 
   results.forEach((r, i) => {
     const tr = document.createElement('tr');
+    tr.style.cursor = 'pointer';
     const ocsf = r.ocsf ? (r.ocsf.ocsf_class_name || r.ocsf.class_name || r.ocsf.class_uid || JSON.stringify(r.ocsf)) : '—';
     const tpl  = (r.template || '').substring(0, 60) + ((r.template || '').length > 60 ? '…' : '');
     const ct   = r.change_type || 'NONE';
@@ -670,6 +730,7 @@ function renderResults(results) {
       <td><span class="mono trunc" title="${esc(r.template || '')}">${esc(tpl)}</span></td>
       <td>${labeledCell}</td>
     `;
+    tr.addEventListener('click', () => handleDetailRowClick(tr, r, 6));
     tbody.appendChild(tr);
   });
 }
@@ -1061,8 +1122,10 @@ function renderTemplates(templates) {
   list.style.display = '';
 
   tbody.innerHTML = '';
+  collapseDetailRow();
   templates.forEach(t => {
     const tr = document.createElement('tr');
+    tr.style.cursor = 'pointer';
     const labeledCell = t.labeled_template
       ? formatLabeledTemplate(t.labeled_template, 0)
       : '<span style="color:var(--muted)">—</span>';
@@ -1072,6 +1135,16 @@ function renderTemplates(templates) {
       <td style="font-size:12px">${labeledCell}</td>
       <td><span class="ct ct-${t.status === 'ACTIVE' ? 'CREATE' : 'NONE'}" style="font-size:10px">${esc(t.status)}</span></td>
     `;
+    // Build a detail-compatible data object from template library data
+    const detailData = {
+      cluster_id:       t.cluster_id,
+      template:         t.pattern,
+      labeled_template: t.labeled_template,
+      llm_decision:     t.llm_decision,
+      llm_reasoning:    t.llm_reasoning,
+      ocsf_event:       null,
+    };
+    tr.addEventListener('click', () => handleDetailRowClick(tr, detailData, 4));
     tbody.appendChild(tr);
   });
 
@@ -1167,6 +1240,151 @@ async function copyEvent(btn) {
   } catch (_) {
     btn.textContent = 'Copy failed';
     setTimeout(() => { btn.innerHTML = '&#128203; Copy'; }, 1500);
+  }
+}
+
+// ──────────────────────────────────────────────
+// Detail panel
+// ──────────────────────────────────────────────
+const _detailState = { tr: null, detailTr: null };
+
+function handleDetailRowClick(tr, data, colSpan) {
+  if (_detailState.tr === tr) { collapseDetailRow(); return; }
+  collapseDetailRow();
+  tr.classList.add('row-selected');
+  _detailState.tr = tr;
+  const detailTr = document.createElement('tr');
+  detailTr.className = 'detail-row';
+  detailTr.innerHTML = `<td colspan="${colSpan}"><div class="detail-panel" id="active-detail-panel"><div style="color:var(--muted);font-size:12px;">Loading…</div></div></td>`;
+  tr.insertAdjacentElement('afterend', detailTr);
+  _detailState.detailTr = detailTr;
+  renderDetailPanel(data, document.getElementById('active-detail-panel'));
+}
+
+function collapseDetailRow() {
+  if (_detailState.tr) { _detailState.tr.classList.remove('row-selected'); _detailState.tr = null; }
+  if (_detailState.detailTr) { _detailState.detailTr.remove(); _detailState.detailTr = null; }
+}
+
+async function renderDetailPanel(data, panelEl) {
+  if (!panelEl) return;
+  let samples = [];
+  try {
+    const res = await fetch(`/templates/${encodeURIComponent(data.cluster_id || '')}/samples`);
+    if (res.ok) samples = (await res.json()).samples || [];
+  } catch(_) {}
+  if (!panelEl.isConnected) return;
+  panelEl.innerHTML = buildDetailSections(data, samples) ||
+    '<div style="color:var(--muted);font-size:12px;">No detail available yet — LLM may still be processing.</div>';
+}
+
+function renderCurrentTemplate(tpl) {
+  if (!tpl) return '—';
+  return esc(tpl).replace(/&lt;\*&gt;/g, '<span class="tok-wildcarded">&lt;*&gt;</span>');
+}
+
+function buildDetailSections(data, samples) {
+  const tpl     = data.template || '';
+  const labeled = data.labeled_template;
+  const ocsf    = data.ocsf_event;
+  const dec     = data.llm_decision;
+  const reason  = data.llm_reasoning;
+  const first   = samples[0] || '';
+  let html = '';
+
+  // Section 1 — Template Evolution (only if labeled_template exists)
+  if (labeled) {
+    html += `
+    <div>
+      <div class="detail-section-title">Template Evolution</div>
+      <div class="tpl-evolution">
+        ${first ? `<div class="tpl-evo-row"><span class="tpl-evo-label">Original</span><span>${esc(first)}</span></div>` : ''}
+        ${tpl  ? `<div class="tpl-evo-row"><span class="tpl-evo-label">Current</span><span>${renderCurrentTemplate(tpl)}</span></div>` : ''}
+        <div class="tpl-evo-row"><span class="tpl-evo-label">Labeled</span><span>${formatLabeledTemplate(labeled, 0)}</span></div>
+      </div>
+    </div>`;
+  }
+
+  // Section 2 — Sample Logs
+  if (samples.length > 0) {
+    const items = samples.slice(0, 5).map(s => `
+      <div class="sample-entry" data-log="${esc(s)}">
+        <span class="sample-text">${esc(s)}</span>
+        <button class="sample-copy-btn" onclick="copySampleEntry(this)">&#128203;</button>
+      </div>`).join('');
+    html += `
+    <div>
+      <div class="detail-section-title">Sample Logs (${Math.min(samples.length, 5)})</div>
+      <div class="samples-list-detail">${items}</div>
+    </div>`;
+  }
+
+  // Section 3 — OCSF Event (if available)
+  if (ocsf && typeof ocsf === 'object' && Object.keys(ocsf).length > 0) {
+    const cn  = ocsf.class_name  || '—';
+    const tn  = ocsf.type_name   || '—';
+    const si  = ocsf.severity_id || 0;
+    const sn  = ocsf.severity    || 'Unknown';
+    const st  = ocsf.status      || '';
+    const sid = ocsf.status_id;
+    const stCls = sid === 1 ? 'status-ok' : sid === 2 ? 'status-err' : 'status-unk';
+    const svCls = 'sev-' + Math.min(Math.max(si, 0), 5);
+    html += `
+    <div>
+      <div class="detail-section-title">OCSF Event</div>
+      <div class="ocsf-event-item">
+        <div class="ocsf-event-summary" onclick="this.parentElement.classList.toggle('expanded')">
+          <span class="ocsf-class-name">${esc(cn)}</span>
+          <span class="ocsf-type-name">${esc(tn)}</span>
+          <span class="sev-tag ${svCls}">${esc(sn)}</span>
+          ${st ? `<span class="${stCls}">${esc(st)}</span>` : ''}
+          <span class="ocsf-arrow">&#9660;</span>
+        </div>
+        <pre class="ocsf-event-json">${esc(JSON.stringify(ocsf, null, 2))}</pre>
+        <div class="ocsf-event-actions">
+          <button class="btn btn-cancel" style="font-size:11px;padding:3px 10px;" onclick="copyEvent(this)">&#128203; Copy</button>
+        </div>
+      </div>
+    </div>`;
+  }
+
+  // Section 4 — LLM Decision History (only if llm_decision not null)
+  if (dec) {
+    const decCls = `dec-${dec}`;
+    const labeledStatus = labeled
+      ? '<span style="color:var(--green);font-weight:600;">yes</span>'
+      : '<span style="color:var(--muted);">pending</span>';
+    html += `
+    <div>
+      <div class="detail-section-title">LLM Decision</div>
+      <div class="llm-detail-box">
+        <div class="llm-detail-row">
+          <span class="llm-detail-key">Decision</span>
+          <span class="dec-tag ${decCls} llm-detail-val">${esc(dec)}</span>
+        </div>
+        ${reason ? `<div class="llm-detail-row"><span class="llm-detail-key">Reasoning</span><span class="llm-detail-val">${esc(reason)}</span></div>` : ''}
+        <div class="llm-detail-row">
+          <span class="llm-detail-key">Labeled</span>
+          <span class="llm-detail-val">${labeledStatus}</span>
+        </div>
+      </div>
+    </div>`;
+  }
+
+  return html;
+}
+
+async function copySampleEntry(btn) {
+  const entry = btn.closest('.sample-entry');
+  const text  = entry ? entry.dataset.log : '';
+  if (!text) return;
+  try {
+    await navigator.clipboard.writeText(text);
+    btn.textContent = '✓';
+    setTimeout(() => { btn.innerHTML = '&#128203;'; }, 1400);
+  } catch(_) {
+    btn.textContent = '!';
+    setTimeout(() => { btn.innerHTML = '&#128203;'; }, 1400);
   }
 }
 
