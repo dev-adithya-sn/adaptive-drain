@@ -124,6 +124,14 @@ def upload():
     })
 
 
+@app.route("/templates/reevaluate", methods=["POST"])
+def reevaluate_templates():
+    body      = request.get_json() or {}
+    min_score = body.get("min_score", 10)
+    queued    = pipeline.reevaluate_all(min_score=min_score)
+    return jsonify({"queued": queued})
+
+
 @app.route("/decisions", methods=["GET"])
 def get_decisions():
     return jsonify({"decisions": approver.get_pending()})

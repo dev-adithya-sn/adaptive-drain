@@ -416,6 +416,8 @@ tbody tr:hover td { background: rgba(255,255,255,.018); }
       <div class="card-header">
         <h2>Template Library</h2>
         <span class="badge zero" id="tlib-badge">0</span>
+        <button onclick="reevaluateAll()" id="reeval-btn" class="btn btn-primary" style="font-size:11px;padding:3px 10px;">&#8635; Re-evaluate All</button>
+        <button onclick="reevaluatePoor()" class="btn btn-ghost" style="font-size:11px;padding:3px 10px;">&#8635; Poor Only (&lt;6)</button>
       </div>
       <div class="tlib-scroll">
         <table>
@@ -1048,6 +1050,38 @@ async function copyEvent(e, id) {
     await navigator.clipboard.writeText(pre.textContent);
     const btn = document.getElementById(id).querySelector('.copy-btn');
     if (btn) { btn.textContent = 'Copied!'; setTimeout(()=>{ btn.textContent='Copy'; }, 1500); }
+  } catch(_) {}
+}
+
+// ── re-evaluation ────────────────────────────────────────────────────────────
+async function reevaluateAll() {
+  const btn = document.getElementById('reeval-btn');
+  btn.disabled = true;
+  btn.textContent = '↺ Queuing…';
+  try {
+    const res  = await fetch('/templates/reevaluate', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({min_score: 10}),
+    });
+    const data = await res.json();
+    btn.textContent = `↺ Queued ${data.queued}`;
+    setTimeout(() => { btn.disabled = false; btn.innerHTML = '&#8635; Re-evaluate All'; }, 3000);
+  } catch(_) {
+    btn.disabled = false;
+    btn.innerHTML = '&#8635; Re-evaluate All';
+  }
+}
+
+async function reevaluatePoor() {
+  try {
+    const res  = await fetch('/templates/reevaluate', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({min_score: 6}),
+    });
+    const data = await res.json();
+    alert(`Queued ${data.queued} template${data.queued !== 1 ? 's' : ''} with score < 6 for re-evaluation`);
   } catch(_) {}
 }
 

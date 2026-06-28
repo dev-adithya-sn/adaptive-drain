@@ -188,6 +188,11 @@ class TemplatePipeline:
                 cluster.quality_issues     = quality.get("issues", [])
                 cluster.quality_suggestion = quality.get("suggestion", "")
 
+        # Re-evaluation: update metadata only — never execute merge/split
+        if item.get("reevaluation"):
+            self.pending.release(item["template"])
+            return
+
         if decision.get("decision") == "merge":
             target_id: str | None = decision.get("target_cluster_id")
             if target_id:
@@ -248,6 +253,31 @@ class TemplatePipeline:
                     labeled = decision.get("labeled_template")
                     if labeled:
                         managed.labeled_template = labeled
+
+    # ------------------------------------------------------------------
+    # Re-evaluation
+    # ------------------------------------------------------------------
+
+    def reevaluate_all(self, min_score: int = 10) -> int:
+        """Re-queue ACTIVE templates for LLM review. Returns count queued."""
+        try:
+            count = 0
+            for t in self.store.all_active():
+                if t.quality_score is not None and t.quality_score >= min_score:
+                    continue
+                if not self.pending.should_review(t.pattern):
+                    continue
+                self.queue.put({
+                    "type":         "create",
+                    "cluster_id":   t.cluster_id,
+                    "template":     t.pattern,
+                    "samples":      self.sampler.get(t.cluster_id),
+                    "reevaluation": True,
+                })
+                count += 1
+            return count
+        except Exception:
+            return 0
 
     # ------------------------------------------------------------------
     # Observability
