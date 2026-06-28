@@ -129,6 +129,14 @@ h2 { font-size: 13px; font-weight: 600; letter-spacing: -0.2px; }
 .dec-card-header { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .dec-template { font-family: monospace; font-size: 11px; color: var(--muted); padding: 4px 6px; background: #0f1117; border-radius: 4px; word-break: break-all; }
 .dec-reasoning { font-size: 11px; color: var(--text); }
+.dec-tpl-label { font-size: 0.7em; color: #6b7280; letter-spacing: 0.05em; text-transform: uppercase; margin-bottom: 4px; }
+.dec-tpl-box { font-family: monospace; font-size: 0.85em; color: #e2e8f0; background: #0f1117; padding: 8px; border-radius: 4px; word-break: break-all; margin-bottom: 2px; }
+.dec-tpl-new      { border-left: 3px solid #6366f1; }
+.dec-tpl-existing { border-left: 3px solid #6b7280; }
+.dec-tpl-merged   { border-left: 3px solid #22c55e; }
+.dec-tpl-split    { border-left: 3px solid #eab308; }
+.dec-tpl-reset    { border-left: 3px solid #f97316; }
+.dec-arrow { text-align: center; color: #6366f1; font-size: 0.8em; margin: 6px 0; }
 .dec-actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 2px; }
 .dec-edit-area { display: none; flex-direction: column; gap: 6px; }
 .dec-edit-area.open { display: flex; }
@@ -754,6 +762,8 @@ function renderDecisions(decisions) {
     const card = document.createElement('div');
     card.className = 'dec-card';
     card.dataset.decId = d.decision_id;
+    const dec       = d.decision || {};
+    const decType   = dec.decision || '';
     const typeClass = d.type === 'create' ? 'type-create' : 'type-degrad';
     const typeName  = d.type === 'create' ? 'Create' : 'Degradation';
     card.innerHTML = `
@@ -761,15 +771,15 @@ function renderDecisions(decisions) {
         <span class="type-badge ${typeClass}">${typeName}</span>
         <span class="mono" style="font-size:11px;color:var(--muted);">${esc(d.cluster_id)}</span>
       </div>
-      <div class="dec-template">${esc((d.template||'').substring(0,120))}</div>
-      <div class="dec-reasoning">${esc((d.decision?.reasoning||'').substring(0,160))}</div>
+      ${buildDecisionBody(d.template || '', dec)}
+      <div class="dec-reasoning" style="margin-top:2px;">${esc((dec.reasoning||'').substring(0,200))}</div>
       <div class="dec-actions">
         <button class="btn btn-green" onclick="respond('${d.decision_id}','accept',null,this)">&#10003; Accept</button>
         <button class="btn btn-red"   onclick="respond('${d.decision_id}','reject',null,this)">&#10007; Reject</button>
         <button class="btn btn-blue"  onclick="toggleEdit(this)">&#9998; Edit</button>
       </div>
       <div class="dec-edit-area">
-        <textarea placeholder="Paste edited JSON decision…">${esc(JSON.stringify(d.decision||{},null,2))}</textarea>
+        <textarea placeholder="Paste edited JSON decision…">${esc(JSON.stringify(dec,null,2))}</textarea>
         <div style="display:flex;gap:6px;">
           <button class="btn btn-primary" onclick="submitEdit('${d.decision_id}',this)">Submit Edit</button>
           <button class="btn btn-ghost"   onclick="toggleEdit(this)">Cancel</button>
@@ -778,6 +788,65 @@ function renderDecisions(decisions) {
     `;
     list.appendChild(card);
   });
+}
+
+function tplBox(text, cls) {
+  return `<div class="dec-tpl-box ${cls}">${esc(text)}</div>`;
+}
+function tplLabel(text) {
+  return `<div class="dec-tpl-label">${text}</div>`;
+}
+function arrow(text) {
+  return `<div class="dec-arrow">${text}</div>`;
+}
+function tlibPattern(cid) {
+  const t = _tlibData.find(x => x.cluster_id === cid);
+  return t ? t.pattern : null;
+}
+
+function buildDecisionBody(template, dec) {
+  const dt = dec.decision || '';
+
+  if (dt === 'merge') {
+    const targetId  = dec.target_cluster_id || '';
+    const existing  = tlibPattern(targetId) || `cluster ${targetId}`;
+    const merged    = dec.merged_template || '';
+    return `
+      ${tplLabel('New Template')}
+      ${tplBox(template, 'dec-tpl-new')}
+      ${arrow('&#8595; Merge Into &#8595;')}
+      ${tplLabel(`Existing (cluster ${esc(targetId)})`)}
+      ${tplBox(existing, 'dec-tpl-existing')}
+      ${merged ? arrow('&#8595; Merged Result &#8595;') + tplLabel('Merged Result') + tplBox(merged, 'dec-tpl-merged') : ''}
+    `;
+  }
+
+  if (dt === 'split') {
+    const subs = dec.sub_templates || [];
+    const subHTML = subs.map((s, i) =>
+      `${tplLabel(`[${i}]`)}${tplBox(s, 'dec-tpl-split')}`
+    ).join('');
+    return `
+      ${tplLabel('Original')}
+      ${tplBox(template, 'dec-tpl-new')}
+      ${subs.length ? arrow('&#8595; Split Into &#8595;') + subHTML : ''}
+    `;
+  }
+
+  if (dt === 'reset') {
+    const reset = dec.reset_template || '';
+    return `
+      ${tplLabel('Current')}
+      ${tplBox(template, 'dec-tpl-existing')}
+      ${reset ? arrow('&#8595; Reset To &#8595;') + tplLabel('Reset Target') + tplBox(reset, 'dec-tpl-reset') : ''}
+    `;
+  }
+
+  // keep or unknown — show template as before
+  return `
+    ${tplLabel('New Template')}
+    ${tplBox(template, 'dec-tpl-new')}
+  `;
 }
 
 function toggleEdit(btn) {
@@ -835,7 +904,10 @@ async function loadTemplates() {
   } catch(_) {}
 }
 
+let _tlibData = [];
+
 function renderTemplates(templates) {
+  _tlibData = templates;
   const tbody = document.getElementById('tlib-tbody');
   const badge = document.getElementById('tlib-badge');
   badge.textContent = templates.length;
