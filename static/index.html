@@ -739,7 +739,7 @@ function renderDecisions(decisions) {
   badge.className   = decisions.length > 0 ? 'badge' : 'badge zero';
 
   // remove cards not in current decisions
-  const currentIds = new Set(decisions.map(d => d.decision_id));
+  const currentIds = new Set(decisions.map(d => d.id));
   list.querySelectorAll('[data-dec-id]').forEach(el => {
     if (!currentIds.has(el.dataset.decId)) el.remove();
   });
@@ -758,10 +758,10 @@ function renderDecisions(decisions) {
   if (existing) existing.remove();
 
   decisions.forEach(d => {
-    if (list.querySelector(`[data-dec-id="${d.decision_id}"]`)) return;
+    if (list.querySelector(`[data-dec-id="${d.id}"]`)) return;
     const card = document.createElement('div');
     card.className = 'dec-card';
-    card.dataset.decId = d.decision_id;
+    card.dataset.decId = d.id;
     const dec       = d.decision || {};
     const decType   = dec.decision || '';
     const typeClass = d.type === 'create' ? 'type-create' : 'type-degrad';
@@ -774,14 +774,14 @@ function renderDecisions(decisions) {
       ${buildDecisionBody(d.template || '', dec)}
       <div class="dec-reasoning" style="margin-top:2px;">${esc((dec.reasoning||'').substring(0,200))}</div>
       <div class="dec-actions">
-        <button class="btn btn-green" onclick="respond('${d.decision_id}','accept',null,this)">&#10003; Accept</button>
-        <button class="btn btn-red"   onclick="respond('${d.decision_id}','reject',null,this)">&#10007; Reject</button>
+        <button class="btn btn-green" onclick="respond('${d.id}','accept',null,this)">&#10003; Accept</button>
+        <button class="btn btn-red"   onclick="respond('${d.id}','reject',null,this)">&#10007; Reject</button>
         <button class="btn btn-blue"  onclick="toggleEdit(this)">&#9998; Edit</button>
       </div>
       <div class="dec-edit-area">
         <textarea placeholder="Paste edited JSON decision…">${esc(JSON.stringify(dec,null,2))}</textarea>
         <div style="display:flex;gap:6px;">
-          <button class="btn btn-primary" onclick="submitEdit('${d.decision_id}',this)">Submit Edit</button>
+          <button class="btn btn-primary" onclick="submitEdit('${d.id}',this)">Submit Edit</button>
           <button class="btn btn-ghost"   onclick="toggleEdit(this)">Cancel</button>
         </div>
       </div>
