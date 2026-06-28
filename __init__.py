@@ -9,6 +9,7 @@ from persistence import StatePersistence
 from metrics import MetricsCollector
 from approver import HumanApprover, WebApprover
 from ocsf_event_builder import OCSFEventBuilder
+from preprocessor import LogPreprocessor
 
 __all__ = [
     "TemplatePipeline",
@@ -23,4 +24,5 @@ __all__ = [
     "HumanApprover",
     "WebApprover",
     "OCSFEventBuilder",
+    "LogPreprocessor",
 ]

@@ -22,9 +22,13 @@ class ManagedTemplate:
     merge_target_id: str | None = None
     confirmation_count: int = 0
     created_at: float = field(default_factory=time.time)
-    labeled_template: str | None = None
-    llm_decision:     str | None = None
-    llm_reasoning:    str | None = None
+    labeled_template:   str | None = None
+    llm_decision:       str | None = None
+    llm_reasoning:      str | None = None
+    quality_score:      int | None = None
+    quality_issues:     list = field(default_factory=list)
+    quality_suggestion: str | None = None
+    versions:           list = field(default_factory=list)
 
 
 class TemplateStore:
@@ -41,6 +45,18 @@ class TemplateStore:
         """Add a new ACTIVE template. No-op if cluster_id already exists."""
         if cluster_id not in self._store:
             self._store[cluster_id] = ManagedTemplate(cluster_id=cluster_id, pattern=pattern)
+
+    def add_version(self, cluster_id: str, template: str, trigger_log: str = "") -> None:
+        """Append a version snapshot to a template's history."""
+        t = self._store.get(cluster_id)
+        if not t:
+            return
+        t.versions.append({
+            "version":     len(t.versions) + 1,
+            "template":    template,
+            "trigger_log": trigger_log,
+            "timestamp":   time.time(),
+        })
 
     def stage_merge(self, new_id: str, target_id: str) -> None:
         """Mark new_id as PENDING_MERGE pointing to target_id."""

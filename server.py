@@ -3,6 +3,7 @@
 import os
 import sys
 import threading
+from collections import Counter
 
 sys.path.insert(0, os.path.dirname(__file__))
 
@@ -73,6 +74,8 @@ def upload():
             "change_type":      result.get("change_type"),
             "cluster_id":       result.get("cluster_id"),
             "template":         result.get("template"),
+            "processed_log":    result.get("processed_log"),
+            "extractions":      result.get("extractions", {}),
             "labeled_template": None,
             "llm_decision":     None,
             "llm_reasoning":    None,
@@ -85,10 +88,39 @@ def upload():
 
     pipeline.save()
 
+    # Build upload report
+    ocsf_classes  = Counter()
+    change_types  = Counter()
+    unmatched_map: dict = {}
+    for r in results:
+        change_types[r["change_type"]] += 1
+        if r.get("ocsf") and r["ocsf"].get("ocsf_class_name"):
+            ocsf_classes[r["ocsf"]["ocsf_class_name"]] += 1
+        if not r.get("ocsf"):
+            cid = r.get("cluster_id")
+            if cid:
+                if cid not in unmatched_map:
+                    unmatched_map[cid] = {"cluster_id": cid, "template": r.get("template", ""), "count": 0}
+                unmatched_map[cid]["count"] += 1
+
+    unique_clusters = len({r["cluster_id"] for r in results if r.get("cluster_id")})
+    report = {
+        "filename":          file.filename,
+        "total_logs":        len(results),
+        "unique_templates":  unique_clusters,
+        "compression_pct":   round((1 - unique_clusters / max(len(results), 1)) * 100, 1),
+        "change_types":      dict(change_types),
+        "ocsf_matched":      sum(1 for r in results if r.get("ocsf")),
+        "ocsf_unmatched":    sum(1 for r in results if not r.get("ocsf")),
+        "ocsf_breakdown":    dict(ocsf_classes),
+        "unmatched_templates": sorted(unmatched_map.values(), key=lambda x: x["count"], reverse=True)[:5],
+    }
+
     return jsonify({
         "session_id": session_id,
-        "total": len(results),
-        "results": results,
+        "total":      len(results),
+        "results":    results,
+        "report":     report,
     })
 
 
@@ -119,15 +151,27 @@ def get_templates():
     templates = []
     for t in pipeline.store.all_active():
         templates.append({
-            "cluster_id":       t.cluster_id,
-            "pattern":          t.pattern,
-            "labeled_template": t.labeled_template,
-            "llm_decision":     t.llm_decision,
-            "llm_reasoning":    t.llm_reasoning,
-            "status":           t.status.value,
-            "created_at":       t.created_at,
+            "cluster_id":         t.cluster_id,
+            "pattern":            t.pattern,
+            "labeled_template":   t.labeled_template,
+            "llm_decision":       t.llm_decision,
+            "llm_reasoning":      t.llm_reasoning,
+            "quality_score":      t.quality_score,
+            "quality_issues":     t.quality_issues,
+            "quality_suggestion": t.quality_suggestion,
+            "versions":           len(t.versions),
+            "status":             t.status.value,
+            "created_at":         t.created_at,
         })
     return jsonify({"templates": templates})
+
+
+@app.route("/templates/<cluster_id>/history", methods=["GET"])
+def get_history(cluster_id):
+    t = pipeline.store.get(cluster_id)
+    if not t:
+        return jsonify({"error": "not found"}), 404
+    return jsonify({"cluster_id": cluster_id, "versions": t.versions})
 
 
 @app.route("/templates/<cluster_id>/samples", methods=["GET"])

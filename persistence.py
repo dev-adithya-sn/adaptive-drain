@@ -35,9 +35,13 @@ class StatePersistence:
                     "merge_target_id": t.merge_target_id,
                     "confirmation_count": t.confirmation_count,
                     "created_at": t.created_at,
-                    "labeled_template": t.labeled_template,
-                    "llm_decision":     t.llm_decision,
-                    "llm_reasoning":    t.llm_reasoning,
+                    "labeled_template":   t.labeled_template,
+                    "llm_decision":       t.llm_decision,
+                    "llm_reasoning":      t.llm_reasoning,
+                    "quality_score":      t.quality_score,
+                    "quality_issues":     t.quality_issues,
+                    "quality_suggestion": t.quality_suggestion,
+                    "versions":           t.versions,
                 }
                 for t in store._store.values()
             ]
@@ -84,9 +88,13 @@ class StatePersistence:
                 managed.merge_target_id = t["merge_target_id"]
                 managed.confirmation_count = t["confirmation_count"]
                 managed.created_at = t["created_at"]
-                managed.labeled_template = t.get("labeled_template")
-                managed.llm_decision    = t.get("llm_decision")
-                managed.llm_reasoning   = t.get("llm_reasoning")
+                managed.labeled_template   = t.get("labeled_template")
+                managed.llm_decision       = t.get("llm_decision")
+                managed.llm_reasoning      = t.get("llm_reasoning")
+                managed.quality_score      = t.get("quality_score")
+                managed.quality_issues     = t.get("quality_issues", [])
+                managed.quality_suggestion = t.get("quality_suggestion")
+                managed.versions           = t.get("versions", [])
 
             sampler._reservoirs = {cid: list(logs) for cid, logs in payload.get("reservoirs", {}).items()}
             sampler._counts = dict(payload.get("reservoir_counts", {}))

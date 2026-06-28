@@ -7,6 +7,7 @@ from typing import Any
 
 from approver import HumanApprover
 from drain_adapter import DrainAdapter
+from preprocessor import LogPreprocessor
 from llm_gate import LLMGate
 from metrics import MetricsCollector
 from normalizer import OCSFNormalizer
@@ -37,6 +38,7 @@ class TemplatePipeline:
         self._degradation_threshold = degradation_threshold
 
         self.drain_adapter = DrainAdapter(drain_instance)
+        self.preprocessor  = LogPreprocessor()
         self.sampler = ReservoirSampler()
         self.pending = PendingReviewSet(ttl_seconds=pending_ttl)
         self.queue = ReviewQueue(maxsize=queue_maxsize)
@@ -68,13 +70,18 @@ class TemplatePipeline:
 
     def ingest(self, raw_log: str) -> dict:
         """Process a single raw log line. Never blocks on LLM."""
-        result = self.drain_adapter.add_log(raw_log)
+        pre    = self.preprocessor.process(raw_log)
+        result = self.drain_adapter.add_log(pre.processed)
+        result["original_log"]  = raw_log
+        result["processed_log"] = pre.processed
+        result["extractions"]   = pre.extractions
+
         cluster_id: str = result["cluster_id"]
         template: str = result["template"]
         tokens: list[str] = result["tokens"]
         change_type: str = result["change_type"]
 
-        self.sampler.add(cluster_id, raw_log)
+        self.sampler.add(cluster_id, raw_log)  # always original
         self._bump("logs_ingested")
 
         if change_type == "NONE":
@@ -83,6 +90,7 @@ class TemplatePipeline:
         elif change_type == "CREATE":
             self._bump("templates_created")
             self.store.register(cluster_id, template)
+            self.store.add_version(cluster_id, template, trigger_log=raw_log)
             if self.pending.should_review(template):
                 self.queue.put({
                     "type": "create",
@@ -93,6 +101,7 @@ class TemplatePipeline:
 
         elif change_type == "UPDATE":
             self._bump("templates_updated")
+            self.store.add_version(cluster_id, template, trigger_log=raw_log)
             wildcard_count = sum(1 for t in tokens if t == "<*>")
             wildcard_ratio = wildcard_count / len(tokens) if tokens else 0.0
             if wildcard_ratio > self._degradation_threshold and self.pending.should_review(template):
@@ -107,8 +116,7 @@ class TemplatePipeline:
         # OCSF normalization (optional): attach event classification to the result.
         if self.normalizer is not None:
             ocsf_label = self.normalizer.normalize(template)
-            ocsf_full  = self.normalizer.normalize_full(raw_log, template) \
-                         if ocsf_label else None
+            ocsf_full  = self.normalizer.normalize_full(raw_log, template) if ocsf_label else None
             result["ocsf"]       = ocsf_label
             result["ocsf_event"] = ocsf_full
             self._bump("ocsf_matched" if ocsf_label is not None else "ocsf_unmatched")
@@ -174,6 +182,11 @@ class TemplatePipeline:
                 cluster.labeled_template = decision["labeled_template"]
             cluster.llm_decision  = decision.get("decision")
             cluster.llm_reasoning = decision.get("reasoning")
+            quality = decision.get("quality", {})
+            if quality:
+                cluster.quality_score      = quality.get("score")
+                cluster.quality_issues     = quality.get("issues", [])
+                cluster.quality_suggestion = quality.get("suggestion", "")
 
         if decision.get("decision") == "merge":
             target_id: str | None = decision.get("target_cluster_id")
@@ -208,6 +221,11 @@ class TemplatePipeline:
         if deg_cluster:
             deg_cluster.llm_decision  = decision.get("decision")
             deg_cluster.llm_reasoning = decision.get("reasoning")
+            quality = decision.get("quality", {})
+            if quality:
+                deg_cluster.quality_score      = quality.get("score")
+                deg_cluster.quality_issues     = quality.get("issues", [])
+                deg_cluster.quality_suggestion = quality.get("suggestion", "")
 
         if decision.get("decision") == "split":
             new_ids = self.splitter.execute_split(

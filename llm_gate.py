@@ -89,10 +89,15 @@ class LLMGate:
             "  - Provide a merged_template that generalises both using '<*>' for variable tokens.\n"
             "  - If no good merge exists, choose 'keep'.\n\n"
             f"{_WILDCARD_LABELING_INSTRUCTION}\n"
+            "Quality scoring: evaluate the template and set quality.score 0-10 (10=perfect),\n"
+            "  quality.issues from: too_generic, timestamp_not_masked, over_wildcarded,\n"
+            "  missing_field_labels, should_split, looks_good\n"
+            "  quality.suggestion: one-line improvement if score < 8, else empty string.\n\n"
             "Respond ONLY with valid JSON in this exact shape (no markdown, no extra text):\n"
             '{"decision": "merge" | "keep", "target_cluster_id": "string or null", '
             '"merged_template": "string or null", '
-            '"labeled_template": "string — template with named wildcards", "reasoning": "string"}'
+            '"labeled_template": "string — template with named wildcards", "reasoning": "string", '
+            '"quality": {"score": 0, "issues": [], "suggestion": ""}}'
         )
 
     def build_prompt_degradation(
@@ -115,10 +120,15 @@ class LLMGate:
             "             Provide a tighter reset_template string using '<*>' only where needed.\n"
             "  'keep'   — the wildcard ratio is acceptable given the sample diversity.\n\n"
             f"{_WILDCARD_LABELING_INSTRUCTION}\n"
+            "Quality scoring: evaluate the template and set quality.score 0-10 (10=perfect),\n"
+            "  quality.issues from: too_generic, timestamp_not_masked, over_wildcarded,\n"
+            "  missing_field_labels, should_split, looks_good\n"
+            "  quality.suggestion: one-line improvement if score < 8, else empty string.\n\n"
             "Respond ONLY with valid JSON in this exact shape (no markdown, no extra text):\n"
             '{"decision": "split" | "reset" | "keep", "sub_templates": ["string"] or [], '
             '"reset_template": "string or null", '
-            '"labeled_template": "string — template with named wildcards", "reasoning": "string"}'
+            '"labeled_template": "string — template with named wildcards", "reasoning": "string", '
+            '"quality": {"score": 0, "issues": [], "suggestion": ""}}'
         )
 
     # ------------------------------------------------------------------
