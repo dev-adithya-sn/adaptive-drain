@@ -771,7 +771,7 @@ function renderDecisions(decisions) {
         <span class="type-badge ${typeClass}">${typeName}</span>
         <span class="mono" style="font-size:11px;color:var(--muted);">${esc(d.cluster_id)}</span>
       </div>
-      ${buildDecisionBody(d.template || '', dec)}
+      ${buildDecisionBody(d.item?.template || '', dec)}
       <div class="dec-reasoning" style="margin-top:2px;">${esc((dec.reasoning||'').substring(0,200))}</div>
       <div class="dec-actions">
         <button class="btn btn-green" onclick="respond('${d.id}','accept',null,this)">&#10003; Accept</button>
