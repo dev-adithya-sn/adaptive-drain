@@ -60,3 +60,21 @@ def test_never_raises_on_malformed():
     assert r.original == ""
     r2 = pp.process(None)  # type: ignore
     assert r2.original is None or r2.processed is not None
+
+
+def test_username_after_for_keyword():
+    r = pp.process("Accepted password for alice from 192.168.1.10")
+    assert r.processed == "Accepted password for <USERNAME> from <IP>"
+    assert r.extractions.get("USERNAME") == ["alice"]
+
+
+def test_username_after_user_keyword():
+    r = pp.process("authentication failed for user root attempt=3")
+    assert "user <USERNAME>" in r.processed
+    assert "root" not in r.processed
+    assert r.extractions.get("USERNAME") == ["root"]
+
+
+def test_password_value_masked():
+    r = pp.process("password=secretvalue123")
+    assert r.processed == "password <PASSWORD>"

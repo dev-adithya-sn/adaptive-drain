@@ -19,31 +19,54 @@ _FALLBACK_KEEP_DEGRADATION: dict = {
 }
 
 _LABEL_VOCAB = {
-    "<ip>", "<port>", "<user>", "<username>", "<password>",
-    "<auth_method>", "<host>", "<hostname>", "<domain>", "<url>",
-    "<path>", "<method>", "<status_code>", "<bytes>", "<duration>",
-    "<timestamp>", "<date>", "<time_val>", "<pid>", "<process>",
-    "<service>", "<table>", "<database>", "<query>", "<rows>",
-    "<key>", "<value>", "<id>", "<hash>", "<email>", "<phone>",
-    "<count>", "<size>", "<level>", "<message>", "<error>", "<unknown>",
+    "<user.name>", "<user.uid>", "<user.email>",
+    "<src_endpoint.ip>", "<src_endpoint.port>", "<src_endpoint.hostname>",
+    "<dst_endpoint.ip>", "<dst_endpoint.port>", "<dst_endpoint.hostname>",
+    "<auth_protocol>", "<auth_protocol_id>",
+    "<http_request.url.path>", "<http_request.url.query>",
+    "<http_request.http_method>",
+    "<http_response.code>", "<http_response.length>",
+    "<database.name>", "<database.table>", "<database.uid>",
+    "<actor.user.name>", "<actor.process.name>", "<actor.process.pid>",
+    "<app.name>", "<app.version>",
+    "<file.path>", "<file.name>", "<file.uid>",
+    "<network.bytes>", "<network.packets>",
+    "<metadata.uid>", "<metadata.version>",
+    "<severity>", "<status>",
+    "<duration>", "<count>", "<size>",
+    "<timestamp>", "<datetime>",
+    "<unknown>",
 }
 
 _WILDCARD_LABELING_INSTRUCTION = """\
-Wildcard labeling rules:
-- The template uses <*> as a placeholder for variable values.
-- For labeled_template: copy the template exactly but replace each <*> \
-with the most specific semantic label from this vocabulary:
-  <ip>, <port>, <user>, <username>, <password>, <auth_method>,
-  <host>, <hostname>, <domain>, <url>, <path>, <method>,
-  <status_code>, <bytes>, <duration>, <timestamp>, <date>, <time_val>,
-  <pid>, <process>, <service>, <table>, <database>, <query>,
-  <rows>, <key>, <value>, <id>, <hash>, <email>, <phone>,
-  <count>, <size>, <level>, <message>, <error>, <unknown>
-- Use context from the sample logs to determine each position's type.
-- If a position varies and doesn't fit any label, use <unknown>.
-- labeled_template must have the same number of placeholders as the \
-original template (count of <*> must equal count of <label> tokens).
-- Non-wildcard tokens must remain exactly as they appear in the template.
+Wildcard labeling using OCSF field paths:
+- labeled_template: copy the template exactly but replace each <*> \
+with the most specific OCSF field path from this vocabulary ONLY:
+  User fields:      <user.name> <user.uid> <user.email>
+  Source network:   <src_endpoint.ip> <src_endpoint.port> <src_endpoint.hostname>
+  Dest network:     <dst_endpoint.ip> <dst_endpoint.port> <dst_endpoint.hostname>
+  Auth:             <auth_protocol> <auth_protocol_id>
+  HTTP request:     <http_request.url.path> <http_request.url.query> <http_request.http_method>
+  HTTP response:    <http_response.code> <http_response.length>
+  Database:         <database.name> <database.table> <database.uid>
+  Actor:            <actor.user.name> <actor.process.name> <actor.process.pid>
+  Application:      <app.name> <app.version>
+  File:             <file.path> <file.name> <file.uid>
+  Network:          <network.bytes> <network.packets>
+  Metadata:         <metadata.uid> <metadata.version>
+  Generic:          <severity> <status> <duration> <count> <size> <timestamp> <datetime>
+  Fallback:         <unknown>
+- Use sample logs to determine what each <*> position represents.
+- labeled_template MUST have exactly the same number of tokens as \
+the original template.
+- Non-wildcard tokens must be identical to the original.
+- Only use labels from the vocabulary above. Never invent new ones.
+- If a position doesn't fit any label, use <unknown>.
+Examples:
+  "Accepted <*> for <*> from <*> port <*> ssh2"
+  → "Accepted <auth_protocol> for <user.name> from <src_endpoint.ip> port <dst_endpoint.port> ssh2"
+  "GET <*> HTTP/1.1 <*> <*>"
+  → "GET <http_request.url.path> HTTP/1.1 <http_response.code> <http_response.length>"
 """
 
 

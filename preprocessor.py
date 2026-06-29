@@ -14,6 +14,9 @@ class PreprocessResult:
 class LogPreprocessor:
     """Replaces concrete values with typed placeholders so Drain3 clusters on structure."""
 
+    # Each entry is (pattern, placeholder, extraction_key[, capture_group]).
+    # capture_group defaults to 0 (full match). Use 1 when the value to extract
+    # is in group(1) but the placeholder replaces the whole match.
     MASKS = [
         (r'\b(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{1,2}\s+\d{2}:\d{2}:\d{2}\s+\d{4}',
          '<TIMESTAMP>', 'TIMESTAMP'),
@@ -37,6 +40,15 @@ class LogPreprocessor:
          '<HEX>', 'ID'),
         (r'\bport[= ](\d{1,5})\b',
          'port <PORT>', 'PORT'),
+        # Username after SSH/auth "for <name> from/at/on/(" — IP already replaced above
+        (r'\bfor\s+([a-zA-Z][a-zA-Z0-9_.\-]{1,32})\s+(?=from|at|on|\()',
+         'for <USERNAME> ', 'USERNAME', 1),
+        # Username after "user=" or "user <name>"
+        (r'\buser[= ]([a-zA-Z][a-zA-Z0-9_.\-]{1,32})\b',
+         'user <USERNAME>', 'USERNAME', 1),
+        # Password value — requires "=" to avoid false matches on "password for user"
+        (r'\bpassword=\S+',
+         'password <PASSWORD>', 'PASSWORD'),
         (r'\bpid[= ](\d+)\b',
          'pid <PID>', 'PID'),
         (r'\b0x[0-9a-fA-F]{4,}\b',
@@ -54,10 +66,11 @@ class LogPreprocessor:
     ]
 
     def __init__(self) -> None:
-        self._compiled = [
-            (re.compile(pattern), placeholder, key)
-            for pattern, placeholder, key in self.MASKS
-        ]
+        self._compiled = []
+        for mask in self.MASKS:
+            pattern, placeholder, key = mask[0], mask[1], mask[2]
+            capture_group = mask[3] if len(mask) > 3 else 0
+            self._compiled.append((re.compile(pattern), placeholder, key, capture_group))
 
     def process(self, raw_log: str) -> PreprocessResult:
         """Apply all masks in order. Never raises — returns original on any error."""
@@ -65,9 +78,10 @@ class LogPreprocessor:
             text        = raw_log
             extractions: dict = {}
 
-            for regex, placeholder, key in self._compiled:
-                def replacer(m, ph=placeholder, k=key, ex=extractions):
-                    ex.setdefault(k, []).append(m.group(0))
+            for regex, placeholder, key, capture_group in self._compiled:
+                def replacer(m, ph=placeholder, k=key, ex=extractions, cg=capture_group):
+                    val = m.group(cg) if cg else m.group(0)
+                    ex.setdefault(k, []).append(val)
                     return ph
                 text = regex.sub(replacer, text)
 

@@ -15,7 +15,7 @@ gate = LLMGate(api_key="test")
 def test_validate_valid_labeling():
     assert gate.validate_labeled_template(
         "Accepted <*> for <*> from <*> port <*> ssh2",
-        "Accepted <auth_method> for <user> from <ip> port <port> ssh2",
+        "Accepted <auth_protocol> for <user.name> from <src_endpoint.ip> port <dst_endpoint.port> ssh2",
     ) is True
 
 
@@ -55,11 +55,11 @@ def test_apply_accepts_valid_labeled_template():
     decision = {
         "decision": "keep",
         "reasoning": "ok",
-        "labeled_template": "user <username> logged in",
+        "labeled_template": "user <user.name> logged in",
     }
     original = "user <*> logged in"
     result = gate._apply_labeled_template(decision, original)
-    assert result["labeled_template"] == "user <username> logged in"
+    assert result["labeled_template"] == "user <user.name> logged in"
 
 
 def test_managed_template_labeled_defaults_to_none():
