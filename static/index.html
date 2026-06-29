@@ -862,8 +862,9 @@ function renderBatches(batches) {
     card.className = 'batch-card';
     card.dataset.batchId = b.batch_id;
     card.innerHTML = `
-      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+      <div class="batch-header" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;" data-batch-id="${b.batch_id}" data-pass="1">
         <strong style="font-size:12px;">Batch — ${b.count} template${b.count!==1?'s':''} reviewed</strong>
+        <span class="pass-badge" style="font-size:10px;color:var(--muted);background:#1a1d27;padding:2px 8px;border-radius:10px;margin-left:8px;">Pass 1</span>
       </div>
       <div class="batch-summary">${summaryParts}</div>
       <div class="batch-actions">
@@ -922,18 +923,21 @@ async function approveAll(batchId, btn) {
   btn.disabled = true;
   btn.textContent = 'Executing…';
   try {
-    const res  = await fetch(`/decisions/batch/${batchId}/approve`, {method: 'POST'});
+    const res  = await fetch(`/decisions/batch/${batchId}/approve`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({reparse: false}),
+    });
     const data = await res.json();
-    btn.textContent = `✓ Done (${data.executed})`;
-    const card = btn.closest('[data-batch-id]');
-    setTimeout(() => { if (card) card.remove(); loadTemplates(); }, 2000);
+    btn.textContent = `✓ Applied ${data.executed} decisions`;
+    await loadTemplates();
+    showReparsePrompt(batchId, data.executed);
   } catch(_) { btn.disabled = false; btn.textContent = '✓ Approve All'; }
 }
 
 async function rejectAll(batchId, btn) {
   btn.disabled = true;
   try {
-    // set all decisions to keep then approve
     const card = btn.closest('[data-batch-id]');
     const rows = card ? card.querySelectorAll('[data-row-cid]') : [];
     for (const row of rows) {
@@ -944,11 +948,105 @@ async function rejectAll(batchId, btn) {
         body: JSON.stringify({cluster_id: cid, decision: {decision: 'keep', reasoning: 'user_rejected'}}),
       });
     }
-    const res  = await fetch(`/decisions/batch/${batchId}/approve`, {method: 'POST'});
+    const res  = await fetch(`/decisions/batch/${batchId}/approve`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({reparse: false}),
+    });
     const data = await res.json();
     btn.textContent = `✓ Rejected (${data.executed})`;
     setTimeout(() => { if (card) card.remove(); }, 2000);
   } catch(_) { btn.disabled = false; }
+}
+
+function showReparsePrompt(batchId, executedCount) {
+  const card = document.querySelector(`[data-batch-id="${batchId}"]`);
+  if (!card) return;
+  const existing = card.querySelector('.reparse-section');
+  if (existing) existing.remove();
+  const section = document.createElement('div');
+  section.className = 'reparse-section';
+  section.style.cssText = 'margin-top:12px;padding:12px;background:#0f1117;border-radius:6px;border:1px solid var(--border);';
+  section.innerHTML = `
+    <div style="font-size:12px;color:var(--text);margin-bottom:8px;">
+      &#10003; <strong>${executedCount}</strong> decisions applied.
+      Run another pass to verify templates are stable?
+    </div>
+    <div style="font-size:11px;color:var(--muted);margin-bottom:10px;">
+      Re-processes all stored log samples through updated templates and runs a second LLM review.
+    </div>
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+      <button onclick="runAnotherPass(this)"
+              data-batch-id="${batchId}"
+              data-pass="1"
+              class="btn btn-primary"
+              style="font-size:12px;">&#8635; Run Another Pass</button>
+      <button onclick="this.closest('.reparse-section').remove()"
+              class="btn btn-ghost"
+              style="font-size:12px;">Done</button>
+    </div>
+    <div class="reparse-status" style="margin-top:8px;font-size:11px;color:var(--muted);"></div>
+  `;
+  card.appendChild(section);
+}
+
+async function runAnotherPass(btn) {
+  const batchId  = btn.dataset.batchId;
+  const passNum  = parseInt(btn.dataset.pass || '1');
+  const MAX_PASS = 5;
+  const statusDiv = btn.closest('.reparse-section')?.querySelector('.reparse-status');
+
+  if (passNum > MAX_PASS) {
+    btn.disabled    = true;
+    btn.textContent = 'Maximum passes reached';
+    return;
+  }
+
+  btn.disabled    = true;
+  btn.textContent = `↺ Running pass ${passNum}…`;
+  if (statusDiv) statusDiv.textContent = 'Re-processing log samples…';
+
+  try {
+    const res  = await fetch(`/decisions/batch/${batchId}/approve`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({reparse: true}),
+    });
+    const data  = await res.json();
+    const rp    = data.reparse || {};
+    const stats = rp.reparse_stats || {};
+
+    if (statusDiv) {
+      statusDiv.innerHTML = `
+        Pass ${passNum}: Reparsed <strong>${stats.logs_reparsed || 0}</strong> logs →
+        <strong>${stats.new_creates || 0}</strong> new,
+        <strong>${stats.new_updates || 0}</strong> updated.
+        ${(rp.queued || 0) > 0
+          ? `<strong style="color:#eab308">${rp.queued}</strong> templates need review.`
+          : '<strong style="color:#22c55e">All templates stable.</strong>'}
+      `;
+    }
+
+    // update pass badge on batch card header
+    const card  = document.querySelector(`[data-batch-id="${batchId}"]`);
+    const badge = card?.querySelector('.pass-badge');
+    if (badge) badge.textContent = `Pass ${passNum + 1}`;
+
+    btn.dataset.pass = String(passNum + 1);
+    if (passNum + 1 > MAX_PASS) {
+      btn.disabled    = true;
+      btn.textContent = 'Maximum passes reached (5)';
+    } else {
+      btn.disabled    = false;
+      btn.textContent = `↺ Run Pass ${passNum + 1}`;
+    }
+
+    await loadTemplates();
+  } catch(_) {
+    btn.disabled    = false;
+    btn.textContent = '↺ Run Another Pass';
+    if (statusDiv) statusDiv.textContent = 'Error during reparse.';
+  }
 }
 
 // helpers kept for template library usage

@@ -145,8 +145,18 @@ def get_decisions():
 
 @app.route("/decisions/batch/<batch_id>/approve", methods=["POST"])
 def approve_batch(batch_id):
-    count = pipeline.execute_batch(batch_id)
-    return jsonify({"ok": True, "executed": count})
+    body    = request.get_json() or {}
+    reparse = body.get("reparse", False)
+    result  = pipeline.execute_batch(batch_id, reparse=reparse)
+    response = {"ok": True, "executed": result["executed"]}
+    if result.get("reparse"):
+        rp = result["reparse"]
+        response["reparse"] = {
+            "batch_id":      rp.get("batch_id", ""),
+            "queued":        rp.get("queued", 0),
+            "reparse_stats": rp.get("reparse_stats", {}),
+        }
+    return jsonify(response)
 
 
 @app.route("/decisions/batch/<batch_id>/update", methods=["POST"])

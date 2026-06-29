@@ -188,14 +188,17 @@ class TemplatePipeline:
                 self.drain_adapter.update_template(cid, reset_tpl.split())
                 t.pattern = reset_tpl
 
-    def execute_batch(self, batch_id: str) -> int:
-        """Execute all approved decisions for a batch. Returns count executed."""
+    def execute_batch(self, batch_id: str, reparse: bool = False) -> dict:
+        """Execute all approved decisions for a batch.
+
+        Returns dict with executed count and optional reparse results.
+        """
         if not self.approver or not hasattr(self.approver, "get_batch"):
-            return 0
+            return {"executed": 0, "reparse": None}
 
         decisions = self.approver.get_batch(batch_id)
         if not decisions:
-            return 0
+            return {"executed": 0, "reparse": None}
 
         for dec in decisions:
             try:
@@ -207,7 +210,79 @@ class TemplatePipeline:
         if self.persistence:
             self.persistence.save(self.store, self.sampler)
 
-        return len(decisions)
+        reparse_result = None
+        if reparse:
+            try:
+                reparse_result = self.reparse_and_review()
+            except Exception as e:
+                print(f"[pipeline] reparse error: {e}")
+
+        return {"executed": len(decisions), "reparse": reparse_result}
+
+    def reparse_and_review(self) -> dict:
+        """Re-run all reservoir samples through current Drain3, then batch-review
+        any templates that changed. Never raises."""
+        import uuid
+
+        empty = {
+            "batch_id": "", "decisions": [], "queued": 0,
+            "reparse_stats": {"logs_reparsed": 0, "new_creates": 0, "new_updates": 0},
+        }
+
+        try:
+            # collect all original logs from reservoir across all active clusters
+            all_logs = []
+            for t in self.store.all_active():
+                all_logs.extend(self.sampler.get(t.cluster_id))
+
+            if not all_logs:
+                return empty
+
+            # re-ingest through updated Drain3
+            reparse_results = []
+            for log in all_logs:
+                try:
+                    pre    = self.preprocessor.process(log)
+                    result = self.drain_adapter.add_log(pre.processed)
+                    result["original_log"]  = log
+                    result["processed_log"] = pre.processed
+
+                    cid = str(result.get("cluster_id", ""))
+                    ct  = result.get("change_type", "NONE")
+
+                    if cid:
+                        self.sampler.add(cid, log)
+
+                    if ct == "CREATE":
+                        template = result.get("template", "")
+                        if cid and not self.store.get(cid):
+                            self.store.register(cid, template)
+                            self.store.add_version(cid, template, trigger_log=log)
+
+                    elif ct == "UPDATE":
+                        template = result.get("template", "")
+                        if cid:
+                            self.store.add_version(cid, template, trigger_log=log)
+
+                    reparse_results.append(result)
+                except Exception as e:
+                    print(f"[reparse] error on log: {e}")
+                    continue
+
+            new_creates = sum(1 for r in reparse_results if r.get("change_type") == "CREATE")
+            new_updates = sum(1 for r in reparse_results if r.get("change_type") == "UPDATE")
+
+            batch_result = self.batch_review(reparse_results)
+            batch_result["reparse_stats"] = {
+                "logs_reparsed": len(all_logs),
+                "new_creates":   new_creates,
+                "new_updates":   new_updates,
+            }
+            return batch_result
+
+        except Exception as e:
+            print(f"[reparse_and_review] error: {e}")
+            return empty
 
     # ------------------------------------------------------------------
     # Re-evaluation
