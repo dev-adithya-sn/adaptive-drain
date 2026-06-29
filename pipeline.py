@@ -338,18 +338,34 @@ class TemplatePipeline:
             return 0
 
     def reset(self) -> None:
-        """Wipe all in-memory state — templates, decisions, samples, metrics, events."""
+        """Wipe all in-memory state — templates, decisions, samples, metrics."""
+        # Clear template store
         self.store._store.clear()
-        self.sampler._samples.clear()
-        self.drain_adapter.drain.drain_tree = self.drain_adapter.drain.__class__.__new__(self.drain_adapter.drain.__class__)
-        self.drain_adapter.drain.__init__()
+
+        # Clear reservoir sampler
+        self.sampler._reservoirs.clear()
+        self.sampler._counts.clear()
+
+        # Reset drain tree
+        try:
+            self.drain_adapter.drain.drain_tree.root.key_to_child_node.clear()
+            self.drain_adapter.drain.id_to_cluster.clear()
+        except Exception:
+            pass
+
+        # Clear LLM decision cache
         self._llm_decision_cache.clear()
+
+        # Clear approver batches if present
         if self.approver and hasattr(self.approver, '_batches'):
             self.approver._batches.clear()
+
+        # Reset metrics counters
         if self.metrics:
-            self.metrics._counters.clear()
-        if self.normalizer and hasattr(self.normalizer, '_events'):
-            self.normalizer._events.clear()
+            with self.metrics._lock:
+                for k in self.metrics._counters:
+                    self.metrics._counters[k] = 0
+
         print("[pipeline] state reset on page load", flush=True)
 
     # ------------------------------------------------------------------
