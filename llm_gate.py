@@ -337,31 +337,111 @@ class LLMGate:
 
         sample_block = "\n".join(f"  - {s[:120]}" for s in samples[:3]) or "  (none)"
         prompt = (
-            "You are an OCSF 1.1 log classifier.\n"
-            "Given a log template and sample logs, classify it into the correct OCSF class.\n\n"
-            f"Template: \"{template}\"\n"
-            f"Samples:\n{sample_block}\n\n"
-            "Choose the best matching OCSF class from this list:\n"
-            "  3002 = SSH Activity (category 3 - Identity & Access Management)\n"
-            "  4002 = HTTP Activity (category 4 - Network Activity)\n"
-            "  4001 = Network Activity (category 4 - Network Activity)\n"
-            "  5001 = Datastore Activity (category 5 - Discovery)\n"
-            "  1007 = Application Lifecycle (category 1 - System Activity)\n"
-            "  2001 = Security Finding (category 2 - Findings)\n"
-            "  3001 = Account Change (category 3 - Identity & Access Management)\n"
-            "  0    = Unknown (use only if nothing else fits)\n\n"
-            "Also determine:\n"
-            "  activity_name: one short verb (Logon, Logoff, Open, Close, Query, Create, Update, Delete, Install, Start, Stop, Unknown)\n"
-            "  severity_id: 1=Informational 2=Low 3=Medium 4=High 5=Critical\n\n"
-            "Respond ONLY with valid JSON, no markdown fences:\n"
+            "You are PanthX AI Normalize Engine, an expert security telemetry analyst "
+            "specialized in understanding arbitrary machine logs from unknown systems.\n\n"
+
+            "The logs may originate from ANY source, including but not limited to:\n"
+            "- Linux, Windows, macOS\n"
+            "- Apache, Nginx, IIS, HAProxy\n"
+            "- Kubernetes, Docker, Containers\n"
+            "- AWS, Azure, GCP\n"
+            "- Active Directory, LDAP, Okta, SSO systems\n"
+            "- Firewalls, IDS, IPS, EDR, VPNs\n"
+            "- Databases and message queues\n"
+            "- SaaS applications\n"
+            "- Custom applications and proprietary systems\n"
+            "- Completely unknown log formats\n\n"
+
+            "Your objective is to reverse-engineer the telemetry and provide a semantic "
+            "understanding of the event.\n\n"
+
+            f"Template:\n{template}\n\n"
+            f"Raw sample logs:\n{sample_block}\n\n"
+
+            "Tasks:\n"
+            "1. Identify the most likely log source and vendor.\n"
+            "2. Estimate confidence in the source identification (0-100).\n"
+            "3. Determine whether the event is security relevant.\n"
+            "4. Infer the semantic event represented by the logs.\n"
+            "5. Map the event to the best OCSF 1.1 class.\n"
+            "6. Extract entities, observables and important fields.\n"
+            "7. Generate a regex capable of extracting these fields from future logs.\n"
+            "8. Infer the schema of future logs of this template.\n"
+            "9. Identify indicators useful for threat hunting and detections.\n"
+            "10. If uncertain, make the best effort classification and lower confidence accordingly.\n\n"
+
+            "Reasoning Guidelines:\n"
+            "- Use ALL sample lines together to infer meaning.\n"
+            "- Similar wording across samples often indicates the product type.\n"
+            "- Consider timestamps, hostnames, event IDs, process names, URLs, ports, and field ordering.\n"
+            "- Prefer semantic understanding over exact vendor matching.\n"
+            "- Proprietary logs are expected.\n"
+            "- Never invent values that do not appear in the logs.\n"
+            "- Unknown values must be empty strings.\n"
+            "- If no OCSF class fits, use class_uid 0.\n"
+            "- Respond ONLY with valid JSON. Do not include markdown.\n\n"
+
             "{\n"
-            '  "ocsf_class_uid": <integer>,\n'
-            '  "ocsf_class_name": "<string>",\n'
-            '  "activity_id": <integer>,\n'
-            '  "activity_name": "<string>",\n'
-            '  "category_uid": <integer>,\n'
-            '  "category_name": "<string>",\n'
-            '  "severity_id": <integer>\n'
+            '  "log_source": "",\n'
+            '  "vendor": "",\n'
+            '  "product": "",\n'
+            '  "log_source_confidence": 0,\n'
+            '  "security_relevant": true,\n'
+            '  "telemetry_type": "",\n'
+            '  "semantic_event": "",\n'
+            '  "event_description": "",\n'
+            '  "severity_id": 1,\n'
+            '  "ocsf_class_uid": 0,\n'
+            '  "ocsf_class_name": "",\n'
+            '  "category_uid": 0,\n'
+            '  "category_name": "",\n'
+            '  "activity_id": 0,\n'
+            '  "activity_name": "",\n'
+            '  "regex_pattern": "",\n'
+            '  "template_confidence": 0,\n'
+            '  "recommended_index": "",\n'
+            '  "storage_class": "hot",\n'
+            '  "detection_tags": [],\n'
+            '  "mitre_attack_techniques": [],\n'
+            '  "ioc_candidates": [],\n'
+            '  "anomaly_indicators": [],\n'
+            '  "entities": {\n'
+            '      "users": [],\n'
+            '      "hosts": [],\n'
+            '      "ips": [],\n'
+            '      "domains": [],\n'
+            '      "urls": [],\n'
+            '      "processes": [],\n'
+            '      "files": [],\n'
+            '      "services": [],\n'
+            '      "containers": [],\n'
+            '      "cloud_resources": [],\n'
+            '      "email_addresses": [],\n'
+            '      "hashes": []\n'
+            '  },\n'
+            '  "fields": {\n'
+            '      "timestamp": "",\n'
+            '      "hostname": "",\n'
+            '      "username": "",\n'
+            '      "src_ip": "",\n'
+            '      "dst_ip": "",\n'
+            '      "dst_port": "",\n'
+            '      "src_port": "",\n'
+            '      "protocol": "",\n'
+            '      "http_method": "",\n'
+            '      "http_path": "",\n'
+            '      "http_status": "",\n'
+            '      "process_name": "",\n'
+            '      "process_id": "",\n'
+            '      "parent_process": "",\n'
+            '      "command_line": "",\n'
+            '      "file_path": "",\n'
+            '      "service": "",\n'
+            '      "db_name": "",\n'
+            '      "container_name": "",\n'
+            '      "event_id": "",\n'
+            '      "message": ""\n'
+            '  }\n'
             "}\n"
         )
 
@@ -371,7 +451,7 @@ class LLMGate:
                 headers=self._headers,
                 json={
                     "model": self._model,
-                    "max_tokens": 256,
+                    "max_tokens": 1024,
                     "temperature": 0,
                     "messages": [{"role": "user", "content": prompt}],
                 },

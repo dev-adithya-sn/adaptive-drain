@@ -236,6 +236,7 @@ class TemplatePipeline:
                         "raw_data":      raw_log,
                     }
                 ocsf       = ocsf_full or {}
+                cached = self._ocsf_classify_cache.get(template, {})
                 entry = {
                     "raw_log":      raw_log,
                     "template":     template,
@@ -254,6 +255,14 @@ class TemplatePipeline:
                     "db_name":      (ocsf.get("database") or {}).get("name", ""),
                     "service":      (ocsf.get("service") or {}).get("name", ""),
                     "ingested_at":  int(time.time() * 1000),
+                    "log_source":      cached.get("log_source", ""),
+                    "vendor":          cached.get("vendor", ""),
+                    "semantic_event":  cached.get("semantic_event", ""),
+                    "security_relevant": cached.get("security_relevant", False),
+                    "storage_class":   cached.get("storage_class", "hot"),
+                    "mitre_techniques": cached.get("mitre_attack_techniques", []),
+                    "detection_tags":  cached.get("detection_tags", []),
+                    "telemetry_type":  cached.get("telemetry_type", ""),
                 }
                 self._parsed_logs.append(entry)
             except Exception:
