@@ -239,7 +239,8 @@ class OCSFEventBuilder:
 
             if service_m:
                 svc_name = service_m.group(1)
-                event["app"] = {"name": svc_name}
+                event["app"]     = {"name": svc_name}
+                event["service"] = {"name": svc_name}
                 event["observables"].append({
                     "name": "app.name", "type_id": 7,
                     "type": "Resource Name", "value": svc_name,

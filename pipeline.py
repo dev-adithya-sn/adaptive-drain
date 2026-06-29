@@ -241,6 +241,9 @@ class TemplatePipeline:
                         "raw_data":      raw_log,
                     }
                 ocsf = ocsf_full or {}
+                import re as _re2
+                _svc_m = _re2.search(r'\bservice\s+(\w+)', raw_log, _re2.IGNORECASE)
+                _svc_direct = _svc_m.group(1) if _svc_m else ""
                 entry = {
                     "raw_log":      raw_log,
                     "template":     template,
@@ -257,7 +260,7 @@ class TemplatePipeline:
                     "http_path":    llm_fields_extracted.get("http_path") or (ocsf.get("http_request") or {}).get("url", {}).get("path", "") or llm_fields.get("http_path", ""),
                     "http_status":  llm_fields_extracted.get("http_status") or (ocsf.get("http_response") or {}).get("code", "") or llm_fields.get("http_status", ""),
                     "db_name":      llm_fields_extracted.get("db_name") or (ocsf.get("database") or {}).get("name", "") or llm_fields.get("db_name", ""),
-                    "service":      llm_fields_extracted.get("service") or (ocsf.get("service") or {}).get("name", "") or llm_fields.get("service", ""),
+                    "service":      _svc_direct or llm_fields_extracted.get("service", "") or (ocsf.get("service") or {}).get("name", "") or llm_fields.get("service", ""),
                     "log_source":   cached.get("log_source", ""),
                     "vendor":       cached.get("vendor", ""),
                     "semantic_event": cached.get("semantic_event", ""),
