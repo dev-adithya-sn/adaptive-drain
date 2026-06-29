@@ -80,7 +80,7 @@ class LLMGate:
     ) -> None:
         self._api_key = api_key
         self._url = "https://api.groq.com/openai/v1/chat/completions"
-        self._model = "llama-3.3-70b-versatile"  # or llama-3.3-70b-versatile
+        self._model = "llama-3.1-8b-instant"  # or llama-3.3-70b-versatile
         self._headers = {
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
