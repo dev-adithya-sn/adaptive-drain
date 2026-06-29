@@ -3,6 +3,43 @@
 # matches the template string wins. Patterns are matched with re.search, so
 # they need not anchor to the whole template.
 rules:
+  # ---- API Activity (OCSF class 6006) — must come before HTTP rules ----
+  - pattern: "/api/|/v[0-9]+/|/graphql|/rpc/|/rest/"
+    ocsf_class_uid: 6006
+    ocsf_class_name: "API Activity"
+    activity_id: 1
+    activity_name: "Read"
+    severity_id: 1
+    category_uid: 6
+    category_name: "Application Activity"
+
+  - pattern: "/api/.*login|/api/.*auth|/api/.*token|/api/.*session|/api/.*oauth"
+    ocsf_class_uid: 6006
+    ocsf_class_name: "API Activity"
+    activity_id: 2
+    activity_name: "Create"
+    severity_id: 2
+    category_uid: 6
+    category_name: "Application Activity"
+
+  - pattern: "(?:POST|PUT|PATCH) /api/|(?:POST|PUT|PATCH) /v[0-9]+/"
+    ocsf_class_uid: 6006
+    ocsf_class_name: "API Activity"
+    activity_id: 2
+    activity_name: "Create"
+    severity_id: 1
+    category_uid: 6
+    category_name: "Application Activity"
+
+  - pattern: "(?:DELETE) /api/|(?:DELETE) /v[0-9]+/"
+    ocsf_class_uid: 6006
+    ocsf_class_name: "API Activity"
+    activity_id: 4
+    activity_name: "Delete"
+    severity_id: 2
+    category_uid: 6
+    category_name: "Application Activity"
+
   # ---- SSH activity (OCSF class 3002) ----
   - pattern: "sshd.*accepted|ssh.*login.*success|accepted (?:password|publickey) for"
     ocsf_class_uid: 3002
