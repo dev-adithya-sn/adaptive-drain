@@ -150,7 +150,7 @@ class LLMGate:
             "temperature": 0,
         }
         try:
-            time.sleep(5)
+            time.sleep(2)
             resp = requests.post(self._url, headers=self._headers, json=body, timeout=30)
             resp.raise_for_status()
             data = resp.json()
