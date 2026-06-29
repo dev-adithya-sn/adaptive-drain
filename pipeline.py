@@ -170,7 +170,13 @@ class TemplatePipeline:
         t.llm_decision       = decision
         t.llm_reasoning      = dec.get("reasoning", "")
         quality              = dec.get("quality") or {}
-        t.quality_score      = quality.get("score")
+        raw_score = quality.get("score")
+        if raw_score is not None:
+            try:
+                raw_score = max(0, min(10, int(float(raw_score))))
+            except (TypeError, ValueError):
+                raw_score = None
+        t.quality_score      = raw_score
         t.quality_issues     = quality.get("issues", [])
         t.quality_suggestion = quality.get("suggestion", "")
 
@@ -202,6 +208,8 @@ class TemplatePipeline:
         t = self.store.get(cid)
         if not t or not self.normalizer:
             return
+        if t.llm_decision is None:
+            return  # only parse logs for templates that have been LLM-reviewed and approved
         template = t.labeled_template or t.pattern
         samples  = self.sampler.get(cid)
         for raw_log in samples:
