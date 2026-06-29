@@ -149,7 +149,6 @@ h2 { font-size: 13px; font-weight: 600; letter-spacing: -0.2px; }
 .batch-table th { color: var(--muted); font-weight: 500; padding: 4px 6px; border-bottom: 1px solid var(--border); text-align: left; white-space: nowrap; }
 .batch-table td { padding: 6px 8px; border-bottom: 1px solid rgba(42,45,62,.5); vertical-align: top; }
 .batch-table .col-reasoning { min-width: 200px; white-space: normal; word-break: break-word; color: var(--muted); font-size: 11px; }
-.batch-table .col-labeled   { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: monospace; }
 .batch-table tr:last-child td { border-bottom: none; }
 .dec-edit-area { display: none; flex-direction: column; gap: 4px; margin-top: 4px; }
 .dec-edit-area.open { display: flex; }
@@ -806,10 +805,40 @@ function renderBatches(batches) {
         ? `<span data-full="${esc(reasoning)}" data-short="${esc(short)}" data-expanded="false">${esc(short)}<a href="#" onclick="toggleReasoning(this.parentElement);return false;" style="color:#6366f1;font-size:10px;"> more</a></span>`
         : `<span>${esc(reasoning)}</span>`;
       const mergeInfo = dt === 'merge' ? ` → ${esc(d.merge_into_cluster_id || '')}` : '';
+
+      // build labeled-template cell based on decision type
+      let lblHtml;
+      if (dt === 'reset') {
+        const resetTpl = d.reset_template;
+        lblHtml = `
+          <span style="font-size:10px;color:var(--muted);text-transform:uppercase;display:block;margin-bottom:2px;">Current:</span>
+          <span style="font-family:monospace;font-size:11px;color:var(--muted);text-decoration:line-through;display:block;">${esc(lbl)}</span>
+          <span style="color:#f97316;font-size:10px;display:block;margin:3px 0;">&#8595; Reset To &#8595;</span>
+          <span style="font-size:10px;color:#f97316;text-transform:uppercase;display:block;margin-bottom:2px;">Reset To:</span>
+          ${resetTpl
+            ? `<span style="font-family:monospace;font-size:11px;color:#e2e8f0;background:#0f1117;padding:4px 6px;border-radius:3px;border-left:3px solid #f97316;display:block;word-break:break-all;">${esc(resetTpl)}</span>`
+            : `<span style="font-size:11px;color:#f97316;opacity:.6;">No reset template provided</span>`}`;
+      } else if (dt === 'merge') {
+        const targetId  = d.merge_into_cluster_id || '';
+        const mergedTpl = d.merged_template;
+        lblHtml = `
+          <span style="font-size:10px;color:#6366f1;text-transform:uppercase;display:block;margin-bottom:2px;">Merging into cluster ${esc(targetId)}:</span>
+          ${mergedTpl
+            ? `<span style="font-family:monospace;font-size:11px;color:#e2e8f0;background:#0f1117;padding:4px 6px;border-radius:3px;border-left:3px solid #6366f1;display:block;word-break:break-all;">${esc(mergedTpl)}</span>`
+            : `<span style="font-size:11px;color:var(--muted);">Merge target: cluster ${esc(targetId)}</span>`}`;
+      } else if (dt === 'split') {
+        const subs = d.sub_templates || [];
+        lblHtml = `
+          <span style="font-size:10px;color:#eab308;text-transform:uppercase;display:block;margin-bottom:4px;">Split into:</span>
+          ${subs.map((s, si) => `<span style="font-family:monospace;font-size:11px;color:#e2e8f0;background:#0f1117;padding:3px 6px;border-radius:3px;border-left:3px solid #eab308;display:block;word-break:break-all;margin-bottom:3px;">[${si}] ${esc(s)}</span>`).join('')}`;
+      } else {
+        lblHtml = `<span style="font-family:monospace;font-size:11px;" title="${esc(lbl)}">${esc(lbl)}</span>`;
+      }
+
       return `<tr data-row-cid="${esc(d.cluster_id)}">
         <td style="font-family:monospace;color:var(--muted);white-space:nowrap;">${esc(d.cluster_id)}</td>
         <td><span class="d-badge ${decBadgeCls(dt)}">${dt}${mergeInfo}</span></td>
-        <td class="col-labeled" title="${esc(lbl)}">${esc(lbl)}</td>
+        <td style="max-width:280px;">${lblHtml}</td>
         <td class="col-reasoning">${reasoningHtml}</td>
         <td>
           <button class="btn btn-ghost" style="font-size:10px;padding:2px 6px;"
