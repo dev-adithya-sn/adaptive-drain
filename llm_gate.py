@@ -318,6 +318,84 @@ class LLMGate:
 
         return all_results
 
+    def classify_template(self, template: str, samples: list[str]) -> dict:
+        """Ask the LLM to classify an unmatched template into an OCSF class.
+        Returns a dict with ocsf_class_uid, ocsf_class_name, activity_id,
+        activity_name, category_uid, category_name, severity_id.
+        Never raises — returns a generic Unknown fallback on any error.
+        """
+        _FALLBACK_CLASSIFY = {
+            "ocsf_class_uid":  0,
+            "ocsf_class_name": "Unknown",
+            "activity_id":     0,
+            "activity_name":   "Unknown",
+            "category_uid":    0,
+            "category_name":   "Other",
+            "severity_id":     1,
+            "matched_rule":    "llm_classified",
+        }
+
+        sample_block = "\n".join(f"  - {s[:120]}" for s in samples[:3]) or "  (none)"
+        prompt = (
+            "You are an OCSF 1.1 log classifier.\n"
+            "Given a log template and sample logs, classify it into the correct OCSF class.\n\n"
+            f"Template: \"{template}\"\n"
+            f"Samples:\n{sample_block}\n\n"
+            "Choose the best matching OCSF class from this list:\n"
+            "  3002 = SSH Activity (category 3 - Identity & Access Management)\n"
+            "  4002 = HTTP Activity (category 4 - Network Activity)\n"
+            "  4001 = Network Activity (category 4 - Network Activity)\n"
+            "  5001 = Datastore Activity (category 5 - Discovery)\n"
+            "  1007 = Application Lifecycle (category 1 - System Activity)\n"
+            "  2001 = Security Finding (category 2 - Findings)\n"
+            "  3001 = Account Change (category 3 - Identity & Access Management)\n"
+            "  0    = Unknown (use only if nothing else fits)\n\n"
+            "Also determine:\n"
+            "  activity_name: one short verb (Logon, Logoff, Open, Close, Query, Create, Update, Delete, Install, Start, Stop, Unknown)\n"
+            "  severity_id: 1=Informational 2=Low 3=Medium 4=High 5=Critical\n\n"
+            "Respond ONLY with valid JSON, no markdown fences:\n"
+            "{\n"
+            '  "ocsf_class_uid": <integer>,\n'
+            '  "ocsf_class_name": "<string>",\n'
+            '  "activity_id": <integer>,\n'
+            '  "activity_name": "<string>",\n'
+            '  "category_uid": <integer>,\n'
+            '  "category_name": "<string>",\n'
+            '  "severity_id": <integer>\n'
+            "}\n"
+        )
+
+        try:
+            resp = requests.post(
+                self._url,
+                headers=self._headers,
+                json={
+                    "model": self._model,
+                    "max_tokens": 256,
+                    "temperature": 0,
+                    "messages": [{"role": "user", "content": prompt}],
+                },
+                timeout=20,
+            )
+            resp.raise_for_status()
+            raw = resp.json()["choices"][0]["message"]["content"].strip()
+            # strip fences if present
+            m = _FENCE_RE.search(raw)
+            if m:
+                raw = m.group(1).strip()
+            result = json.loads(raw)
+            # validate required fields
+            uid = int(result.get("ocsf_class_uid", 0))
+            result["ocsf_class_uid"]  = uid
+            result["category_uid"]    = int(result.get("category_uid", 0))
+            result["activity_id"]     = int(result.get("activity_id", 0))
+            result["severity_id"]     = max(1, min(5, int(result.get("severity_id", 1))))
+            result["matched_rule"]    = "llm_classified"
+            return result
+        except Exception as exc:
+            print(f"[llm_gate] classify_template ERROR: {exc}", flush=True)
+            return _FALLBACK_CLASSIFY
+
     # ------------------------------------------------------------------
     # API call
     # ------------------------------------------------------------------

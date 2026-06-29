@@ -45,6 +45,7 @@ class TemplatePipeline:
 
         self.splitter = TemplateSplitter(self.drain_adapter, self.store, self.sampler)
         self._llm_decision_cache: dict[str, dict] = {}
+        self._ocsf_classify_cache: dict[str, dict] = {}
         from collections import deque
         self._parsed_logs: deque = deque(maxlen=100)
 
@@ -206,7 +207,26 @@ class TemplatePipeline:
         for raw_log in samples:
             try:
                 ocsf_label = self.normalizer.normalize(template)
-                ocsf_full  = self.normalizer.normalize_full(raw_log, template) if ocsf_label else {}
+                if ocsf_label is None:
+                    # Check classify cache first
+                    if template not in self._ocsf_classify_cache:
+                        samples = self.sampler.get(cid)[:3]
+                        self._ocsf_classify_cache[template] = self.llm_gate.classify_template(template, samples)
+                    ocsf_label = self._ocsf_classify_cache[template]
+                ocsf_full = self.normalizer.normalize_full(raw_log, template) if self.normalizer.normalize(template) else {}
+                if not ocsf_full and ocsf_label:
+                    # Build minimal event from LLM classification
+                    import uuid as _uuid
+                    ocsf_full = {
+                        "class_name":    ocsf_label.get("ocsf_class_name", "Unknown"),
+                        "activity_name": ocsf_label.get("activity_name", "Unknown"),
+                        "category_name": ocsf_label.get("category_name", "Other"),
+                        "severity_id":   ocsf_label.get("severity_id", 1),
+                        "severity":      {1:"Informational",2:"Low",3:"Medium",4:"High",5:"Critical"}.get(ocsf_label.get("severity_id",1),"Unknown"),
+                        "status":        "",
+                        "message":       raw_log,
+                        "raw_data":      raw_log,
+                    }
                 ocsf       = ocsf_full or {}
                 entry = {
                     "raw_log":      raw_log,
@@ -393,6 +413,7 @@ class TemplatePipeline:
 
         # Clear LLM decision cache
         self._llm_decision_cache.clear()
+        self._ocsf_classify_cache.clear()
         self._parsed_logs.clear()
 
         # Clear approver batches if present
