@@ -224,17 +224,26 @@ def get_samples(cluster_id):
 
 @app.route("/events", methods=["GET"])
 def get_events():
-    """Return the last N full OCSF events from the most recent upload session."""
-    n = int(request.args.get("n", 50))
-    with _results_lock:
-        if not _results_store:
-            return jsonify({"events": []})
-        last_session = list(_results_store.values())[-1]
-        events = [
-            r["ocsf_event"] for r in last_session
-            if r.get("ocsf_event") is not None
-        ]
-    return jsonify({"events": events[-n:]})
+    """Return the last N parsed log events from _parsed_logs."""
+    n = min(int(request.args.get("n", 30)), 100)
+    if not hasattr(pipeline, "_parsed_logs") or not pipeline._parsed_logs:
+        return jsonify({"events": []})
+    logs = list(pipeline._parsed_logs)[-n:]
+    # Format to match what the OCSF Events panel expects
+    events = []
+    for l in logs:
+        events.append({
+            "class_name":    l.get("ocsf_class", ""),
+            "activity_name": l.get("activity", ""),
+            "severity":      l.get("severity", ""),
+            "status":        l.get("status", ""),
+            "message":       l.get("raw_log", ""),
+            "user":          {"name": l.get("username", "")} if l.get("username") else None,
+            "src_endpoint":  {"ip": l.get("src_ip", "")} if l.get("src_ip") else None,
+            "http_request":  {"http_method": l.get("http_method", ""), "url": {"path": l.get("http_path", "")}} if l.get("http_method") else None,
+            "http_response": {"code": l.get("http_status", "")} if l.get("http_status") else None,
+        })
+    return jsonify({"events": events})
 
 
 @app.route("/parsed-logs", methods=["GET"])
