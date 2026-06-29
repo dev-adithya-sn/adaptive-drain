@@ -216,7 +216,7 @@ class LLMGate:
             "- Respond with valid JSON only, no markdown fences.\n"
         )
 
-    BATCH_CHUNK_SIZE = 5
+    BATCH_CHUNK_SIZE = 3
 
     def call_batch(self, templates: list[dict], prior_decisions: dict | None = None) -> list[dict]:
         """Send templates in chunks of BATCH_CHUNK_SIZE. Returns combined list of decisions."""
@@ -294,19 +294,18 @@ class LLMGate:
         all_results: list[dict] = []
         for idx, chunk in enumerate(chunks):
             if idx > 0:
-                time.sleep(2)
+                time.sleep(5)
             try:
                 all_results.extend(_call_chunk(chunk))
             except requests.HTTPError as exc:
                 if exc.response is not None and exc.response.status_code == 429:
-                    print(f"[llm_gate] 429 on chunk {idx}, retrying after 10s", flush=True)
-                    time.sleep(10)
+                    print(f"[llm_gate] 429 on chunk {idx}, retrying after 30s", flush=True)
+                    time.sleep(30)
                     try:
                         all_results.extend(_call_chunk(chunk))
-                    except Exception as retry_exc:
-                        print(f"[llm_gate] chunk {idx} retry failed: {retry_exc}", flush=True)
-                        import traceback; traceback.print_exc()
-                        all_results.extend(_chunk_fallback(chunk))
+                    except Exception:
+                        print(f"[llm_gate] 429 retry failed for chunk, using fallback", flush=True)
+                        all_results.extend([{"cluster_id": t["cluster_id"], "decision": "keep", "reasoning": "rate_limited", "labeled_template": t["template"], "quality": {"score": None, "issues": [], "suggestion": ""}} for t in chunk])
                 else:
                     print(f"[llm_gate] call_batch ERROR on chunk {idx}: {exc}", flush=True)
                     import traceback; traceback.print_exc()
