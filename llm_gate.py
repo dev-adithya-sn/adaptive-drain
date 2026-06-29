@@ -154,8 +154,23 @@ class LLMGate:
             '"quality": {"score": 0, "issues": [], "suggestion": ""}}'
         )
 
-    def build_prompt_batch(self, templates: list[dict]) -> str:
+    def build_prompt_batch(self, templates: list[dict], prior_decisions: dict | None = None) -> str:
         """Build a single prompt reviewing all templates at once."""
+        prior_block = ""
+        if prior_decisions:
+            lines = []
+            for cid, pd in prior_decisions.items():
+                lines.append(
+                    f"  - cluster {cid}: {pd['decision'].upper()} "
+                    f"— \"{pd['template']}\" (reason: {pd['reasoning']})"
+                )
+            prior_block = (
+                "PRIOR DECISIONS (from previous evaluation — do NOT contradict these "
+                "without strong new evidence. Do NOT merge templates you previously kept separate):\n"
+                + "\n".join(lines)
+                + "\n\n"
+            )
+
         template_block = ""
         for i, t in enumerate(templates):
             samples_str = "\n".join(
@@ -175,7 +190,7 @@ class LLMGate:
             "2. Should it be merged into another template in this list?\n"
             "3. Is it too generic and should be split or reset?\n\n"
             "Also label each <*> wildcard with the correct OCSF field path.\n"
-            f"{template_block}\n"
+            f"{prior_block}{template_block}\n"
             f"{_WILDCARD_LABELING_INSTRUCTION}\n"
             "Respond ONLY as a JSON object with this exact structure:\n"
             '{\n  "templates": [\n'
@@ -201,7 +216,7 @@ class LLMGate:
             "- Respond with valid JSON only, no markdown fences.\n"
         )
 
-    def call_batch(self, templates: list[dict]) -> list[dict]:
+    def call_batch(self, templates: list[dict], prior_decisions: dict | None = None) -> list[dict]:
         """Send all templates in one LLM call. Returns list of decisions."""
         if not templates:
             return []
@@ -217,7 +232,7 @@ class LLMGate:
             for t in templates
         ]
 
-        prompt = self.build_prompt_batch(templates)
+        prompt = self.build_prompt_batch(templates, prior_decisions=prior_decisions)
         body   = {
             "model": self._model,
             "messages": [

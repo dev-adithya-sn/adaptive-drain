@@ -43,6 +43,7 @@ class TemplatePipeline:
         self.approver    = approver
 
         self.splitter = TemplateSplitter(self.drain_adapter, self.store, self.sampler)
+        self._llm_decision_cache: dict[str, dict] = {}
 
     def _bump(self, counter: str, by: int = 1) -> None:
         if self.metrics is not None:
@@ -134,13 +135,18 @@ class TemplatePipeline:
 
         self._bump("llm_calls")
         batch_id  = str(uuid.uuid4())
-        decisions = self.llm_gate.call_batch(to_review)
+        decisions = self.llm_gate.call_batch(to_review, prior_decisions=self._llm_decision_cache)
 
         if self.approver and hasattr(self.approver, "set_batch"):
             self.approver.set_batch(batch_id, decisions, to_review)
         else:
             for dec in decisions:
                 self._execute_decision(dec)
+                self._llm_decision_cache[dec.get("cluster_id", "")] = {
+                    "decision":  dec.get("decision", "keep"),
+                    "template":  dec.get("labeled_template") or dec.get("merged_template") or dec.get("template", ""),
+                    "reasoning": dec.get("reasoning", "")
+                }
 
         return {
             "batch_id": batch_id,
@@ -308,7 +314,7 @@ class TemplatePipeline:
                 return 0
 
             self._bump("llm_calls")
-            decisions = self.llm_gate.call_batch(to_review)
+            decisions = self.llm_gate.call_batch(to_review, prior_decisions=self._llm_decision_cache)
 
             if self.approver and hasattr(self.approver, "set_batch"):
                 import uuid
@@ -318,6 +324,11 @@ class TemplatePipeline:
 
             for dec in decisions:
                 self._execute_decision(dec)
+                self._llm_decision_cache[dec.get("cluster_id", "")] = {
+                    "decision":  dec.get("decision", "keep"),
+                    "template":  dec.get("labeled_template") or dec.get("merged_template") or dec.get("template", ""),
+                    "reasoning": dec.get("reasoning", "")
+                }
             return len(decisions)
         except Exception:
             return 0
