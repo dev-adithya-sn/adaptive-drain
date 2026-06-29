@@ -821,11 +821,14 @@ function renderBatches(batches) {
       } else if (dt === 'merge') {
         const targetId  = d.merge_into_cluster_id || '';
         const mergedTpl = d.merged_template;
+        const tplStyle  = 'font-family:monospace;font-size:11px;color:#e2e8f0;background:#0f1117;padding:4px 6px;border-radius:3px;display:block;word-break:break-all;';
         lblHtml = `
-          <span style="font-size:10px;color:#6366f1;text-transform:uppercase;display:block;margin-bottom:2px;">Merging into cluster ${esc(targetId)}:</span>
+          <span style="font-size:10px;color:#6366f1;text-transform:uppercase;display:block;margin-bottom:4px;">Merging cluster ${esc(d.cluster_id)} → ${esc(targetId)}</span>
+          <span style="${tplStyle}border-left:3px solid #94a3b8;margin-bottom:2px;" title="Source template">${esc(lbl)}</span>
+          <span style="color:#6366f1;font-size:11px;display:block;text-align:center;margin:2px 0;">&#8595; merges into &#8595;</span>
           ${mergedTpl
-            ? `<span style="font-family:monospace;font-size:11px;color:#e2e8f0;background:#0f1117;padding:4px 6px;border-radius:3px;border-left:3px solid #6366f1;display:block;word-break:break-all;">${esc(mergedTpl)}</span>`
-            : `<span style="font-size:11px;color:var(--muted);">Merge target: cluster ${esc(targetId)}</span>`}`;
+            ? `<span style="${tplStyle}border-left:3px solid #6366f1;" title="Merged result">${esc(mergedTpl)}</span>`
+            : `<span style="font-size:11px;color:var(--muted);">Target: cluster ${esc(targetId)} (no merged template returned)</span>`}`;
       } else if (dt === 'split') {
         const subs = d.sub_templates || [];
         lblHtml = `
