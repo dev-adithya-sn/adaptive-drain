@@ -86,6 +86,9 @@ def upload():
     with _results_lock:
         _results_store[session_id] = results
 
+    # Batch LLM review (synchronous — happens before response)
+    batch_result = pipeline.batch_review(results)
+
     pipeline.save()
 
     # Build upload report
@@ -121,6 +124,8 @@ def upload():
         "total":      len(results),
         "results":    results,
         "report":     report,
+        "batch_id":   batch_result.get("batch_id", ""),
+        "llm_queued": batch_result.get("queued", 0),
     })
 
 
@@ -134,7 +139,23 @@ def reevaluate_templates():
 
 @app.route("/decisions", methods=["GET"])
 def get_decisions():
-    return jsonify({"decisions": approver.get_pending()})
+    batches = approver.get_all_batches() if hasattr(approver, "get_all_batches") else []
+    return jsonify({"batches": batches, "decisions": []})
+
+
+@app.route("/decisions/batch/<batch_id>/approve", methods=["POST"])
+def approve_batch(batch_id):
+    count = pipeline.execute_batch(batch_id)
+    return jsonify({"ok": True, "executed": count})
+
+
+@app.route("/decisions/batch/<batch_id>/update", methods=["POST"])
+def update_batch_decision(batch_id):
+    body       = request.get_json() or {}
+    cluster_id = body.get("cluster_id")
+    updated    = body.get("decision", {})
+    ok = approver.update_decision(batch_id, cluster_id, updated)
+    return jsonify({"ok": ok})
 
 
 @app.route("/decisions/<decision_id>/respond", methods=["POST"])

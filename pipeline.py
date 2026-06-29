@@ -1,8 +1,6 @@
-"""Main orchestrator — wires all AdaptiveDrain modules and runs the LLM worker thread."""
+"""Main orchestrator — wires all AdaptiveDrain modules and runs batch LLM review."""
 
 from __future__ import annotations
-import threading
-import time
 from typing import Any
 
 from approver import HumanApprover
@@ -11,24 +9,20 @@ from preprocessor import LogPreprocessor
 from llm_gate import LLMGate
 from metrics import MetricsCollector
 from normalizer import OCSFNormalizer
-from pending_set import PendingReviewSet
 from persistence import StatePersistence
 from reservoir_sampler import ReservoirSampler
-from review_queue import ReviewQueue
 from splitter import TemplateSplitter
 from template_store import TemplateStore
 
 
 class TemplatePipeline:
-    """Hot-path log ingestion pipeline with an async LLM decision gate."""
+    """Log ingestion pipeline with synchronous batch LLM review after upload."""
 
     def __init__(
         self,
         drain_instance: Any,
         openrouter_api_key: str,
         confirm_threshold: int = 100,
-        queue_maxsize: int = 500,
-        pending_ttl: float = 30.0,
         degradation_threshold: float = 0.4,
         normalizer: OCSFNormalizer | None = None,
         persistence: StatePersistence | None = None,
@@ -40,27 +34,17 @@ class TemplatePipeline:
         self.drain_adapter = DrainAdapter(drain_instance)
         self.preprocessor  = LogPreprocessor()
         self.sampler = ReservoirSampler()
-        self.pending = PendingReviewSet(ttl_seconds=pending_ttl)
-        self.queue = ReviewQueue(maxsize=queue_maxsize)
         self.store = TemplateStore(confirm_threshold=confirm_threshold)
         self.llm_gate = LLMGate(api_key=openrouter_api_key)
 
-        # Optional add-ons.
-        self.normalizer = normalizer
+        self.normalizer  = normalizer
         self.persistence = persistence
-        self.metrics = metrics
-        self.approver = approver
+        self.metrics     = metrics
+        self.approver    = approver
 
-        # Instantiated after the core modules it depends on.
         self.splitter = TemplateSplitter(self.drain_adapter, self.store, self.sampler)
 
-        self._worker_thread = threading.Thread(
-            target=self._llm_worker, daemon=True, name="llm-worker"
-        )
-        self._worker_thread.start()
-
     def _bump(self, counter: str, by: int = 1) -> None:
-        """Increment a metrics counter if a collector is attached."""
         if self.metrics is not None:
             self.metrics.increment(counter, by)
 
@@ -76,12 +60,11 @@ class TemplatePipeline:
         result["processed_log"] = pre.processed
         result["extractions"]   = pre.extractions
 
-        cluster_id: str = result["cluster_id"]
-        template: str = result["template"]
-        tokens: list[str] = result["tokens"]
+        cluster_id: str  = result["cluster_id"]
+        template: str    = result["template"]
         change_type: str = result["change_type"]
 
-        self.sampler.add(cluster_id, raw_log)  # always original
+        self.sampler.add(cluster_id, raw_log)
         self._bump("logs_ingested")
 
         if change_type == "NONE":
@@ -91,29 +74,11 @@ class TemplatePipeline:
             self._bump("templates_created")
             self.store.register(cluster_id, template)
             self.store.add_version(cluster_id, template, trigger_log=raw_log)
-            if self.pending.should_review(template):
-                self.queue.put({
-                    "type": "create",
-                    "cluster_id": cluster_id,
-                    "template": template,
-                    "samples": self.sampler.get(cluster_id),
-                })
 
         elif change_type == "UPDATE":
             self._bump("templates_updated")
             self.store.add_version(cluster_id, template, trigger_log=raw_log)
-            wildcard_count = sum(1 for t in tokens if t == "<*>")
-            wildcard_ratio = wildcard_count / len(tokens) if tokens else 0.0
-            if wildcard_ratio > self._degradation_threshold and self.pending.should_review(template):
-                self.queue.put({
-                    "type": "degradation",
-                    "cluster_id": cluster_id,
-                    "template": template,
-                    "wildcard_ratio": wildcard_ratio,
-                    "samples": self.sampler.get(cluster_id),
-                })
 
-        # OCSF normalization (optional): attach event classification to the result.
         if self.normalizer is not None:
             ocsf_label = self.normalizer.normalize(template)
             ocsf_full  = self.normalizer.normalize_full(raw_log, template) if ocsf_label else None
@@ -127,155 +92,158 @@ class TemplatePipeline:
         return result
 
     # ------------------------------------------------------------------
-    # Background LLM worker
+    # Batch LLM review
     # ------------------------------------------------------------------
 
-    def _llm_worker(self) -> None:
-        """Continuously drain the review queue and process items via LLM."""
-        while True:
-            item = self.queue.get()
-            if item is None:
-                time.sleep(0.1)
+    def batch_review(self, session_results: list[dict]) -> dict:
+        """
+        Called once after all logs are ingested for a session.
+        Collects new/updated templates, makes ONE LLM batch call, stores
+        decisions in the approver for UI display (or auto-executes if no approver).
+        """
+        import uuid
+
+        seen      = set()
+        to_review = []
+
+        for r in session_results:
+            cid         = str(r.get("cluster_id", ""))
+            change_type = r.get("change_type", "")
+
+            if cid in seen or change_type not in ("CREATE", "UPDATE"):
                 continue
-            try:
-                self._process_item(item)
-            except Exception as exc:
-                print(f"[LLM worker] unhandled error: {exc}")
-            finally:
-                self.pending.release(item.get("template", ""))
 
-    def _process_item(self, item: dict) -> None:
-        """Dispatch a queued review item to the appropriate LLM handler."""
-        if item["type"] == "create":
-            self._handle_create(item)
-        elif item["type"] == "degradation":
-            self._handle_degradation(item)
+            t = self.store.get(cid)
+            if not t:
+                continue
 
-    def _handle_create(self, item: dict) -> None:
-        active_dicts = [
-            {"cluster_id": t.cluster_id, "pattern": t.pattern}
-            for t in self.store.all_active()
-            if t.cluster_id != item["cluster_id"]
-        ]
-        candidates = self.llm_gate.find_candidates(item["template"], active_dicts)
-        prompt = self.llm_gate.build_prompt_create(item["template"], item["samples"], candidates)
+            tokens         = t.pattern.split()
+            wildcard_count = sum(1 for tok in tokens if tok == "<*>")
+            wildcard_ratio = wildcard_count / max(len(tokens), 1)
+
+            seen.add(cid)
+            to_review.append({
+                "cluster_id":    cid,
+                "template":      t.pattern,
+                "samples":       self.sampler.get(cid)[:3],
+                "wildcard_ratio": wildcard_ratio,
+            })
+
+        if not to_review:
+            return {"batch_id": "", "decisions": [], "queued": 0}
+
         self._bump("llm_calls")
-        decision = self.llm_gate.call(prompt, original_template=item["template"])
+        batch_id  = str(uuid.uuid4())
+        decisions = self.llm_gate.call_batch(to_review)
 
-        if self.approver is not None:
-            decision = self.approver.review(item, decision)
+        if self.approver and hasattr(self.approver, "set_batch"):
+            self.approver.set_batch(batch_id, decisions, to_review)
+        else:
+            for dec in decisions:
+                self._execute_decision(dec)
 
-        print(
-            f"[LLM create] cluster={item['cluster_id']} "
-            f"decision={decision.get('decision')} "
-            f"reason={decision.get('reasoning', '')[:80]}"
-        )
+        return {
+            "batch_id": batch_id,
+            "decisions": decisions,
+            "queued":   len(decisions),
+        }
 
-        if decision.get("reasoning") == "llm_error":
-            self._bump("llm_errors")
-        if decision.get("decision") == "keep":
-            self._bump("llm_fallback_keep")
+    def _execute_decision(self, dec: dict) -> None:
+        """Execute a single LLM decision dict after user approval."""
+        cid      = str(dec.get("cluster_id", ""))
+        decision = dec.get("decision", "keep")
+        t        = self.store.get(cid)
 
-        cluster = self.store.get(item["cluster_id"])
-        if cluster:
-            if decision.get("labeled_template"):
-                cluster.labeled_template = decision["labeled_template"]
-            cluster.llm_decision  = decision.get("decision")
-            cluster.llm_reasoning = decision.get("reasoning")
-            quality = decision.get("quality", {})
-            if quality:
-                cluster.quality_score      = quality.get("score")
-                cluster.quality_issues     = quality.get("issues", [])
-                cluster.quality_suggestion = quality.get("suggestion", "")
-
-        # Re-evaluation: update metadata only — never execute merge/split
-        if item.get("reevaluation"):
-            self.pending.release(item["template"])
+        if not t:
             return
 
-        if decision.get("decision") == "merge":
-            target_id: str | None = decision.get("target_cluster_id")
-            if target_id:
-                self.store.stage_merge(item["cluster_id"], target_id)
-                self._bump("templates_merged")
-                merged_template: str | None = decision.get("merged_template")
-                if merged_template:
-                    new_tokens = merged_template.split()
-                    self.drain_adapter.update_template(target_id, new_tokens)
+        t.labeled_template   = dec.get("labeled_template")
+        t.llm_decision       = decision
+        t.llm_reasoning      = dec.get("reasoning", "")
+        quality              = dec.get("quality") or {}
+        t.quality_score      = quality.get("score")
+        t.quality_issues     = quality.get("issues", [])
+        t.quality_suggestion = quality.get("suggestion", "")
 
-    def _handle_degradation(self, item: dict) -> None:
-        prompt = self.llm_gate.build_prompt_degradation(
-            item["template"], item["wildcard_ratio"], item["samples"]
-        )
-        self._bump("llm_calls")
-        decision = self.llm_gate.call(prompt, original_template=item["template"])
+        if decision == "merge":
+            target_id  = str(dec.get("merge_into_cluster_id") or "")
+            merged_tpl = dec.get("merged_template")
+            if target_id and target_id != cid:
+                self.store.stage_merge(cid, target_id)
+                if merged_tpl:
+                    self.drain_adapter.update_template(target_id, merged_tpl.split())
+                if self.metrics:
+                    self.metrics.increment("templates_merged")
 
-        if self.approver is not None:
-            decision = self.approver.review(item, decision)
+        elif decision == "split":
+            sub_templates = dec.get("sub_templates", [])
+            if sub_templates and len(sub_templates) >= 2:
+                new_ids = self.splitter.execute_split(cid, sub_templates, self.sampler.get(cid))
+                if new_ids and self.metrics:
+                    self.metrics.increment("templates_split")
 
-        print(
-            f"[LLM degradation] cluster={item['cluster_id']} "
-            f"decision={decision.get('decision')} "
-            f"reason={decision.get('reasoning', '')[:80]}"
-        )
+        elif decision == "reset":
+            reset_tpl = dec.get("reset_template")
+            if reset_tpl:
+                self.drain_adapter.update_template(cid, reset_tpl.split())
+                t.pattern = reset_tpl
 
-        if decision.get("reasoning") == "llm_error":
-            self._bump("llm_errors")
+    def execute_batch(self, batch_id: str) -> int:
+        """Execute all approved decisions for a batch. Returns count executed."""
+        if not self.approver or not hasattr(self.approver, "get_batch"):
+            return 0
 
-        deg_cluster = self.store.get(item["cluster_id"])
-        if deg_cluster:
-            deg_cluster.llm_decision  = decision.get("decision")
-            deg_cluster.llm_reasoning = decision.get("reasoning")
-            quality = decision.get("quality", {})
-            if quality:
-                deg_cluster.quality_score      = quality.get("score")
-                deg_cluster.quality_issues     = quality.get("issues", [])
-                deg_cluster.quality_suggestion = quality.get("suggestion", "")
+        decisions = self.approver.get_batch(batch_id)
+        if not decisions:
+            return 0
 
-        if decision.get("decision") == "split":
-            new_ids = self.splitter.execute_split(
-                item["cluster_id"],
-                decision.get("sub_templates", []),
-                item["samples"],
-            )
-            if new_ids:
-                self._bump("templates_split")
-                print(f"[SPLIT EXECUTED] {item['cluster_id']} → {new_ids}")
+        for dec in decisions:
+            try:
+                self._execute_decision(dec)
+            except Exception as e:
+                print(f"[pipeline] execute_decision error: {e}")
 
-        elif decision.get("decision") == "reset":
-            reset_template: str | None = decision.get("reset_template")
-            if reset_template:
-                new_tokens = reset_template.split()
-                self.drain_adapter.update_template(item["cluster_id"], new_tokens)
-                managed = self.store.get(item["cluster_id"])
-                if managed is not None:
-                    managed.pattern = reset_template
-                    labeled = decision.get("labeled_template")
-                    if labeled:
-                        managed.labeled_template = labeled
+        self.approver.clear_batch(batch_id)
+        if self.persistence:
+            self.persistence.save(self.store, self.sampler)
+
+        return len(decisions)
 
     # ------------------------------------------------------------------
     # Re-evaluation
     # ------------------------------------------------------------------
 
     def reevaluate_all(self, min_score: int = 10) -> int:
-        """Re-queue ACTIVE templates for LLM review. Returns count queued."""
+        """Re-evaluate ACTIVE templates via batch LLM call. Returns count queued."""
         try:
-            count = 0
+            to_review = []
             for t in self.store.all_active():
                 if t.quality_score is not None and t.quality_score >= min_score:
                     continue
-                if not self.pending.should_review(t.pattern):
-                    continue
-                self.queue.put({
-                    "type":         "create",
-                    "cluster_id":   t.cluster_id,
-                    "template":     t.pattern,
-                    "samples":      self.sampler.get(t.cluster_id),
-                    "reevaluation": True,
+                tokens = t.pattern.split()
+                wc     = sum(1 for tok in tokens if tok == "<*>")
+                to_review.append({
+                    "cluster_id":    t.cluster_id,
+                    "template":      t.pattern,
+                    "samples":       self.sampler.get(t.cluster_id)[:3],
+                    "wildcard_ratio": wc / max(len(tokens), 1),
                 })
-                count += 1
-            return count
+
+            if not to_review:
+                return 0
+
+            self._bump("llm_calls")
+            decisions = self.llm_gate.call_batch(to_review)
+
+            if self.approver and hasattr(self.approver, "set_batch"):
+                import uuid
+                batch_id = str(uuid.uuid4())
+                self.approver.set_batch(batch_id, decisions, to_review)
+                return len(decisions)
+
+            for dec in decisions:
+                self._execute_decision(dec)
+            return len(decisions)
         except Exception:
             return 0
 
@@ -284,24 +252,18 @@ class TemplatePipeline:
     # ------------------------------------------------------------------
 
     def stats(self) -> dict:
-        """Return combined stats from the queue and template store."""
-        return {
-            "queue": self.queue.stats(),
-            "templates": self.store.stats(),
-        }
+        return {"templates": self.store.stats()}
 
     # ------------------------------------------------------------------
     # Persistence
     # ------------------------------------------------------------------
 
     def save(self) -> bool:
-        """Persist store + sampler state to disk if persistence is configured."""
         if self.persistence is not None:
             return self.persistence.save(self.store, self.sampler)
         return False
 
     def load(self) -> bool:
-        """Restore store + sampler state from disk if persistence is configured."""
         if self.persistence is not None:
             return self.persistence.load(self.store, self.sampler)
         return False

@@ -150,12 +150,12 @@ class HumanApprover:
 
 
 class WebApprover:
-    """Non-blocking approver for web UI. Pushes decisions to a queue,
-    waits for HTTP response instead of stdin."""
+    """Non-blocking approver for web UI. Stores batch decisions for UI display."""
 
     def __init__(self):
-        self._pending = {}
-        self._lock = threading.Lock()
+        self._pending  = {}
+        self._batches  = {}
+        self._lock     = threading.Lock()
 
     def review(self, item: dict, decision: dict) -> dict:
         """Block the LLM worker thread until the web user responds."""
@@ -197,6 +197,57 @@ class WebApprover:
                 }
                 for v in self._pending.values()
             ]
+
+    # ------------------------------------------------------------------
+    # Batch API (new flow)
+    # ------------------------------------------------------------------
+
+    def set_batch(self, batch_id: str, decisions: list[dict], templates: list[dict]) -> None:
+        """Store a batch of LLM decisions for UI display."""
+        with self._lock:
+            self._batches[batch_id] = {
+                "id":        batch_id,
+                "decisions": decisions,
+                "templates": {t["cluster_id"]: t for t in templates},
+                "approved":  False,
+            }
+
+    def get_batch(self, batch_id: str) -> list[dict]:
+        with self._lock:
+            b = self._batches.get(batch_id)
+            return b["decisions"] if b else []
+
+    def get_all_batches(self) -> list[dict]:
+        with self._lock:
+            return [
+                {
+                    "batch_id":  b["id"],
+                    "count":     len(b["decisions"]),
+                    "decisions": b["decisions"],
+                    "approved":  b["approved"],
+                }
+                for b in self._batches.values()
+            ]
+
+    def clear_batch(self, batch_id: str) -> None:
+        with self._lock:
+            self._batches.pop(batch_id, None)
+
+    def update_decision(self, batch_id: str, cluster_id: str, updated: dict) -> bool:
+        """Update a single decision within a batch before approval."""
+        with self._lock:
+            b = self._batches.get(batch_id)
+            if not b:
+                return False
+            for dec in b["decisions"]:
+                if str(dec.get("cluster_id")) == str(cluster_id):
+                    dec.update(updated)
+                    return True
+            return False
+
+    # ------------------------------------------------------------------
+    # Legacy per-decision API (kept for backward compatibility)
+    # ------------------------------------------------------------------
 
     def respond(self, decision_id: str, action: str, edited_decision=None) -> bool:
         """Called by Flask route when user responds.

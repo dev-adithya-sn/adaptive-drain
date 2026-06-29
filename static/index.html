@@ -123,12 +123,8 @@ h2 { font-size: 13px; font-weight: 600; letter-spacing: -0.2px; }
 .upload-status.ok  { color: var(--green); }
 .upload-status.err { color: var(--red); }
 
-/* ── decisions ── */
+/* ── decisions / batch ── */
 .decisions-list { display: flex; flex-direction: column; gap: 8px; max-height: 300px; overflow-y: auto; }
-.dec-card { background: var(--card2); border: 1px solid var(--border); border-radius: 6px; padding: 10px; display: flex; flex-direction: column; gap: 6px; }
-.dec-card-header { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
-.dec-template { font-family: monospace; font-size: 11px; color: var(--muted); padding: 4px 6px; background: #0f1117; border-radius: 4px; word-break: break-all; }
-.dec-reasoning { font-size: 11px; color: var(--text); }
 .dec-tpl-label { font-size: 0.7em; color: #6b7280; letter-spacing: 0.05em; text-transform: uppercase; margin-bottom: 4px; }
 .dec-tpl-box { font-family: monospace; font-size: 0.85em; color: #e2e8f0; background: #0f1117; padding: 8px; border-radius: 4px; word-break: break-all; margin-bottom: 2px; }
 .dec-tpl-new      { border-left: 3px solid #6366f1; }
@@ -137,14 +133,30 @@ h2 { font-size: 13px; font-weight: 600; letter-spacing: -0.2px; }
 .dec-tpl-split    { border-left: 3px solid #eab308; }
 .dec-tpl-reset    { border-left: 3px solid #f97316; }
 .dec-arrow { text-align: center; color: #6366f1; font-size: 0.8em; margin: 6px 0; }
-.dec-actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 2px; }
-.dec-edit-area { display: none; flex-direction: column; gap: 6px; }
-.dec-edit-area.open { display: flex; }
-.dec-edit-area textarea { width: 100%; background: #0f1117; border: 1px solid var(--border); border-radius: 4px; color: var(--text); padding: 6px; font-family: monospace; font-size: 11px; resize: vertical; min-height: 60px; }
 .type-badge { font-size: 10px; font-weight: 600; padding: 1px 6px; border-radius: 3px; text-transform: uppercase; }
 .type-create { background: rgba(99,102,241,.2); color: var(--accent); }
 .type-degrad { background: rgba(234,179,8,.2); color: var(--yellow); }
 .empty-state { color: var(--muted); font-size: 12px; padding: 20px 0; text-align: center; }
+/* batch cards */
+.batch-card { background: var(--card2); border: 1px solid var(--border); border-radius: 6px; padding: 10px; display: flex; flex-direction: column; gap: 8px; }
+.batch-summary { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+.batch-stat { font-size: 11px; color: var(--muted); }
+.batch-stat strong { color: var(--text); }
+.batch-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.batch-table { display: none; overflow-x: auto; }
+.batch-table.open { display: block; }
+.batch-table table { width: 100%; border-collapse: collapse; font-size: 11px; }
+.batch-table th { color: var(--muted); font-weight: 500; padding: 4px 6px; border-bottom: 1px solid var(--border); text-align: left; white-space: nowrap; }
+.batch-table td { padding: 4px 6px; border-bottom: 1px solid rgba(42,45,62,.5); vertical-align: top; }
+.batch-table tr:last-child td { border-bottom: none; }
+.dec-edit-area { display: none; flex-direction: column; gap: 4px; margin-top: 4px; }
+.dec-edit-area.open { display: flex; }
+.dec-edit-area textarea { width: 100%; background: #0f1117; border: 1px solid var(--border); border-radius: 4px; color: var(--text); padding: 6px; font-family: monospace; font-size: 10px; resize: vertical; min-height: 48px; }
+.d-badge { display: inline-block; font-size: 10px; font-weight: 600; padding: 1px 5px; border-radius: 3px; text-transform: uppercase; }
+.d-keep  { background: rgba(99,102,241,.15); color: var(--accent); }
+.d-merge { background: rgba(34,197,94,.15); color: var(--green); }
+.d-split { background: rgba(234,179,8,.15); color: var(--yellow); }
+.d-reset { background: rgba(249,115,22,.15); color: var(--orange); }
 
 /* ── stats ── */
 .stats-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
@@ -324,7 +336,7 @@ tbody tr:hover td { background: rgba(255,255,255,.018); }
         <span class="badge zero" id="dec-badge">0</span>
       </div>
       <div class="decisions-list" id="decisions-list">
-        <div class="empty-state" id="dec-empty">&#10003; No pending decisions</div>
+        <div class="empty-state" id="dec-empty">&#10003; No pending batch decisions</div>
       </div>
     </div>
 
@@ -721,158 +733,192 @@ function renderResults(results, sessionId) {
   });
 }
 
-// ── decisions polling ────────────────────────────────────────────────────────
-let _decCache = {};
-
+// ── decisions / batch polling ─────────────────────────────────────────────────
 async function pollDecisions() {
   try {
     const res  = await fetch('/decisions');
     const data = await res.json();
-    renderDecisions(data.decisions || []);
+    renderBatches(data.batches || []);
   } catch(_) {}
 }
 
-function renderDecisions(decisions) {
+function decBadgeCls(d) {
+  const m = {'keep':'d-keep','merge':'d-merge','split':'d-split','reset':'d-reset'};
+  return m[d] || 'd-keep';
+}
+
+function renderBatches(batches) {
   const list  = document.getElementById('decisions-list');
   const badge = document.getElementById('dec-badge');
-  const empty = document.getElementById('dec-empty');
 
-  badge.textContent = decisions.length;
-  badge.className   = decisions.length > 0 ? 'badge' : 'badge zero';
+  const total = batches.reduce((s, b) => s + b.count, 0);
+  badge.textContent = total;
+  badge.className   = total > 0 ? 'badge' : 'badge zero';
 
-  // remove cards not in current decisions
-  const currentIds = new Set(decisions.map(d => d.id));
-  list.querySelectorAll('[data-dec-id]').forEach(el => {
-    if (!currentIds.has(el.dataset.decId)) el.remove();
+  // remove stale batch cards
+  const currentIds = new Set(batches.map(b => b.batch_id));
+  list.querySelectorAll('[data-batch-id]').forEach(el => {
+    if (!currentIds.has(el.dataset.batchId)) el.remove();
   });
 
-  if (!decisions.length) {
+  if (!batches.length) {
     if (!list.querySelector('.empty-state')) {
       const e = document.createElement('div');
       e.className = 'empty-state';
       e.id = 'dec-empty';
-      e.textContent = '✓ No pending decisions';
+      e.textContent = '✓ No pending batch decisions';
       list.appendChild(e);
     }
     return;
   }
-  const existing = document.getElementById('dec-empty');
-  if (existing) existing.remove();
+  const empty = document.getElementById('dec-empty');
+  if (empty) empty.remove();
 
-  decisions.forEach(d => {
-    if (list.querySelector(`[data-dec-id="${d.id}"]`)) return;
+  batches.forEach(b => {
+    if (list.querySelector(`[data-batch-id="${b.batch_id}"]`)) return;
+
+    // count by decision type
+    const counts = {};
+    (b.decisions || []).forEach(d => {
+      const dt = d.decision || 'keep';
+      counts[dt] = (counts[dt] || 0) + 1;
+    });
+    const summaryParts = Object.entries(counts)
+      .map(([k,v]) => `<span class="batch-stat"><strong>${v}</strong> ${k}</span>`)
+      .join('');
+
+    // build expanded table rows
+    const rows = (b.decisions || []).map((d, i) => {
+      const dt  = d.decision || 'keep';
+      const lbl = d.labeled_template || d.template || '';
+      const reason = (d.reasoning || '').substring(0, 100);
+      const mergeInfo = dt === 'merge' ? ` → ${esc(d.merge_into_cluster_id || '')}` : '';
+      return `<tr data-row-cid="${esc(d.cluster_id)}">
+        <td style="font-family:monospace;color:var(--muted);white-space:nowrap;">${esc(d.cluster_id)}</td>
+        <td><span class="d-badge ${decBadgeCls(dt)}">${dt}${mergeInfo}</span></td>
+        <td style="font-family:monospace;max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${esc(lbl)}">${esc(lbl)}</td>
+        <td style="color:var(--muted);max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${esc(reason)}">${esc(reason)}</td>
+        <td>
+          <button class="btn btn-ghost" style="font-size:10px;padding:2px 6px;"
+            onclick="toggleRowEdit(this,'${b.batch_id}','${esc(d.cluster_id)}',${i})">&#9998;</button>
+        </td>
+      </tr>
+      <tr class="dec-edit-area" id="edit-row-${b.batch_id}-${i}">
+        <td colspan="5">
+          <textarea style="width:100%;background:#0f1117;border:1px solid var(--border);border-radius:4px;color:var(--text);padding:6px;font-family:monospace;font-size:10px;resize:vertical;min-height:60px;">${esc(JSON.stringify(d,null,2))}</textarea>
+          <div style="display:flex;gap:6px;margin-top:4px;">
+            <button class="btn btn-primary" style="font-size:10px;padding:2px 8px;"
+              onclick="submitRowEdit(this,'${b.batch_id}','${esc(d.cluster_id)}')">Save</button>
+            <button class="btn btn-ghost" style="font-size:10px;padding:2px 8px;"
+              onclick="toggleRowEdit(this,'${b.batch_id}','${esc(d.cluster_id)}',${i})">Cancel</button>
+          </div>
+        </td>
+      </tr>`;
+    }).join('');
+
     const card = document.createElement('div');
-    card.className = 'dec-card';
-    card.dataset.decId = d.id;
-    const dec       = d.decision || {};
-    const decType   = dec.decision || '';
-    const typeClass = d.type === 'create' ? 'type-create' : 'type-degrad';
-    const typeName  = d.type === 'create' ? 'Create' : 'Degradation';
+    card.className = 'batch-card';
+    card.dataset.batchId = b.batch_id;
     card.innerHTML = `
-      <div class="dec-card-header">
-        <span class="type-badge ${typeClass}">${typeName}</span>
-        <span class="mono" style="font-size:11px;color:var(--muted);">${esc(d.cluster_id)}</span>
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+        <strong style="font-size:12px;">Batch — ${b.count} template${b.count!==1?'s':''} reviewed</strong>
       </div>
-      ${buildDecisionBody(d.item?.template || '', dec)}
-      <div class="dec-reasoning" style="margin-top:2px;">${esc((dec.reasoning||'').substring(0,200))}</div>
-      <div class="dec-actions">
-        <button class="btn btn-green" onclick="respond('${d.id}','accept',null,this)">&#10003; Accept</button>
-        <button class="btn btn-red"   onclick="respond('${d.id}','reject',null,this)">&#10007; Reject</button>
-        <button class="btn btn-blue"  onclick="toggleEdit(this)">&#9998; Edit</button>
+      <div class="batch-summary">${summaryParts}</div>
+      <div class="batch-actions">
+        <button class="btn btn-ghost" style="font-size:11px;padding:3px 10px;"
+          onclick="toggleBatchTable(this,'${b.batch_id}')">&#9660; Review Decisions</button>
+        <button class="btn btn-green" style="font-size:11px;padding:3px 10px;"
+          onclick="approveAll('${b.batch_id}',this)">&#10003; Approve All</button>
+        <button class="btn btn-red" style="font-size:11px;padding:3px 10px;"
+          onclick="rejectAll('${b.batch_id}',this)">&#10007; Reject All</button>
       </div>
-      <div class="dec-edit-area">
-        <textarea placeholder="Paste edited JSON decision…">${esc(JSON.stringify(dec,null,2))}</textarea>
-        <div style="display:flex;gap:6px;">
-          <button class="btn btn-primary" onclick="submitEdit('${d.id}',this)">Submit Edit</button>
-          <button class="btn btn-ghost"   onclick="toggleEdit(this)">Cancel</button>
-        </div>
+      <div class="batch-table" id="btbl-${b.batch_id}">
+        <table>
+          <thead><tr>
+            <th>Cluster</th><th>Decision</th><th>Labeled Template</th>
+            <th>Reasoning</th><th></th>
+          </tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
       </div>
     `;
     list.appendChild(card);
   });
 }
 
+function toggleBatchTable(btn, batchId) {
+  const tbl = document.getElementById(`btbl-${batchId}`);
+  if (!tbl) return;
+  tbl.classList.toggle('open');
+  btn.textContent = tbl.classList.contains('open') ? '▲ Hide Decisions' : '▼ Review Decisions';
+}
+
+function toggleRowEdit(btn, batchId, cid, idx) {
+  const editRow = document.getElementById(`edit-row-${batchId}-${idx}`);
+  if (!editRow) return;
+  const isOpen = editRow.style.display === 'table-row';
+  editRow.style.display = isOpen ? 'none' : 'table-row';
+}
+
+async function submitRowEdit(btn, batchId, cid) {
+  const editRow = btn.closest('tr');
+  const ta = editRow.querySelector('textarea');
+  let parsed;
+  try { parsed = JSON.parse(ta.value); } catch(_) { ta.style.borderColor='var(--red)'; return; }
+  try {
+    await fetch(`/decisions/batch/${batchId}/update`, {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({cluster_id: cid, decision: parsed}),
+    });
+    ta.style.borderColor = 'var(--green)';
+    setTimeout(() => { ta.style.borderColor = ''; }, 1500);
+  } catch(_) {}
+}
+
+async function approveAll(batchId, btn) {
+  btn.disabled = true;
+  btn.textContent = 'Executing…';
+  try {
+    const res  = await fetch(`/decisions/batch/${batchId}/approve`, {method: 'POST'});
+    const data = await res.json();
+    btn.textContent = `✓ Done (${data.executed})`;
+    const card = btn.closest('[data-batch-id]');
+    setTimeout(() => { if (card) card.remove(); loadTemplates(); }, 2000);
+  } catch(_) { btn.disabled = false; btn.textContent = '✓ Approve All'; }
+}
+
+async function rejectAll(batchId, btn) {
+  btn.disabled = true;
+  try {
+    // set all decisions to keep then approve
+    const card = btn.closest('[data-batch-id]');
+    const rows = card ? card.querySelectorAll('[data-row-cid]') : [];
+    for (const row of rows) {
+      const cid = row.dataset.rowCid;
+      await fetch(`/decisions/batch/${batchId}/update`, {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({cluster_id: cid, decision: {decision: 'keep', reasoning: 'user_rejected'}}),
+      });
+    }
+    const res  = await fetch(`/decisions/batch/${batchId}/approve`, {method: 'POST'});
+    const data = await res.json();
+    btn.textContent = `✓ Rejected (${data.executed})`;
+    setTimeout(() => { if (card) card.remove(); }, 2000);
+  } catch(_) { btn.disabled = false; }
+}
+
+// helpers kept for template library usage
 function tplBox(text, cls) {
   return `<div class="dec-tpl-box ${cls}">${esc(text)}</div>`;
 }
 function tplLabel(text) {
   return `<div class="dec-tpl-label">${text}</div>`;
 }
-function arrow(text) {
-  return `<div class="dec-arrow">${text}</div>`;
-}
 function tlibPattern(cid) {
   const t = _tlibData.find(x => x.cluster_id === cid);
   return t ? t.pattern : null;
-}
-
-function buildDecisionBody(template, dec) {
-  const dt = dec.decision || '';
-
-  if (dt === 'merge') {
-    const targetId  = dec.target_cluster_id || '';
-    const existing  = tlibPattern(targetId) || `cluster ${targetId}`;
-    const merged    = dec.merged_template || '';
-    return `
-      ${tplLabel('New Template')}
-      ${tplBox(template, 'dec-tpl-new')}
-      ${arrow('&#8595; Merge Into &#8595;')}
-      ${tplLabel(`Existing (cluster ${esc(targetId)})`)}
-      ${tplBox(existing, 'dec-tpl-existing')}
-      ${merged ? arrow('&#8595; Merged Result &#8595;') + tplLabel('Merged Result') + tplBox(merged, 'dec-tpl-merged') : ''}
-    `;
-  }
-
-  if (dt === 'split') {
-    const subs = dec.sub_templates || [];
-    const subHTML = subs.map((s, i) =>
-      `${tplLabel(`[${i}]`)}${tplBox(s, 'dec-tpl-split')}`
-    ).join('');
-    return `
-      ${tplLabel('Original')}
-      ${tplBox(template, 'dec-tpl-new')}
-      ${subs.length ? arrow('&#8595; Split Into &#8595;') + subHTML : ''}
-    `;
-  }
-
-  if (dt === 'reset') {
-    const reset = dec.reset_template || '';
-    return `
-      ${tplLabel('Current')}
-      ${tplBox(template, 'dec-tpl-existing')}
-      ${reset ? arrow('&#8595; Reset To &#8595;') + tplLabel('Reset Target') + tplBox(reset, 'dec-tpl-reset') : ''}
-    `;
-  }
-
-  // keep or unknown — show template as before
-  return `
-    ${tplLabel('New Template')}
-    ${tplBox(template, 'dec-tpl-new')}
-  `;
-}
-
-function toggleEdit(btn) {
-  const area = btn.closest('.dec-card').querySelector('.dec-edit-area');
-  area.classList.toggle('open');
-}
-
-async function respond(id, action, edited, btn) {
-  btn && (btn.disabled = true);
-  try {
-    const res = await fetch(`/decisions/${id}/respond`, {
-      method: 'POST',
-      headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({action, edited_decision: edited}),
-    });
-    if (res.ok) btn?.closest('.dec-card').remove();
-  } catch(_) { btn && (btn.disabled = false); }
-}
-
-async function submitEdit(id, btn) {
-  const ta = btn.closest('.dec-edit-area').querySelector('textarea');
-  let parsed;
-  try { parsed = JSON.parse(ta.value); } catch(_) { ta.style.borderColor='var(--red)'; return; }
-  await respond(id, 'edit', parsed, btn);
 }
 
 // ── stats polling ─────────────────────────────────────────────────────────────
@@ -1091,7 +1137,7 @@ pollStats();
 loadTemplates();
 loadEvents();
 
-setInterval(pollDecisions,  2000);
+setInterval(pollDecisions,  3000);
 setInterval(pollStats,      5000);
 setInterval(loadTemplates, 10000);
 setInterval(loadEvents,    10000);

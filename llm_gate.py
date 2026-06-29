@@ -154,6 +154,125 @@ class LLMGate:
             '"quality": {"score": 0, "issues": [], "suggestion": ""}}'
         )
 
+    def build_prompt_batch(self, templates: list[dict]) -> str:
+        """Build a single prompt reviewing all templates at once."""
+        template_block = ""
+        for i, t in enumerate(templates):
+            samples_str = "\n".join(
+                f"    • {s[:120]}" for s in (t.get("samples") or [])[:3]
+            )
+            template_block += (
+                f"\nTemplate {i+1} (cluster_id={t['cluster_id']}):\n"
+                f"  Pattern: \"{t['template']}\"\n"
+                f"  Wildcard ratio: {t.get('wildcard_ratio', 0):.0%}\n"
+                f"  Samples:\n{samples_str}\n"
+            )
+
+        return (
+            "You are a log template quality reviewer.\n"
+            "Review ALL of the following templates together and decide for each:\n"
+            "1. Should it be kept as-is?\n"
+            "2. Should it be merged into another template in this list?\n"
+            "3. Is it too generic and should be split or reset?\n\n"
+            "Also label each <*> wildcard with the correct OCSF field path.\n"
+            f"{template_block}\n"
+            f"{_WILDCARD_LABELING_INSTRUCTION}\n"
+            "Respond ONLY as a JSON object with this exact structure:\n"
+            '{\n  "templates": [\n'
+            '    {\n'
+            '      "cluster_id": "string — must match exactly",\n'
+            '      "decision": "keep" | "merge" | "split" | "reset",\n'
+            '      "merge_into_cluster_id": "string or null — only if decision=merge",\n'
+            '      "merged_template": "string or null — only if decision=merge",\n'
+            '      "sub_templates": [],\n'
+            '      "reset_template": "string or null — only if decision=reset",\n'
+            '      "labeled_template": "string — template with OCSF field path labels",\n'
+            '      "quality": {"score": 0, "issues": [], "suggestion": ""},\n'
+            '      "reasoning": "string — one sentence"\n'
+            '    }\n'
+            '  ]\n'
+            '}\n\n'
+            "Rules:\n"
+            "- Every template in the input MUST appear in the output templates array.\n"
+            "- cluster_id values must match exactly what was given.\n"
+            "- For merge: merge_into_cluster_id must be a cluster_id in THIS list.\n"
+            "- labeled_template must have same token count as original template.\n"
+            "- Only use OCSF field path labels from the vocabulary.\n"
+            "- Respond with valid JSON only, no markdown fences.\n"
+        )
+
+    def call_batch(self, templates: list[dict]) -> list[dict]:
+        """Send all templates in one LLM call. Returns list of decisions."""
+        if not templates:
+            return []
+
+        fallback = [
+            {
+                "cluster_id":      t["cluster_id"],
+                "decision":        "keep",
+                "labeled_template": t["template"].replace("<*>", "<unknown>"),
+                "reasoning":       "llm_error",
+                "quality":         {"score": None, "issues": [], "suggestion": ""},
+            }
+            for t in templates
+        ]
+
+        prompt = self.build_prompt_batch(templates)
+        body   = {
+            "model": self._model,
+            "messages": [
+                {"role": "system", "content": "Respond only in JSON."},
+                {"role": "user",   "content": prompt},
+            ],
+            "max_tokens": 4000,
+            "temperature": 0,
+        }
+
+        try:
+            time.sleep(2)
+            resp = requests.post(self._url, headers=self._headers, json=body, timeout=60)
+            resp.raise_for_status()
+            data    = resp.json()
+            content = data["choices"][0]["message"]["content"]
+            parsed  = self._parse_json(content)
+
+            results = parsed.get("templates", [])
+            if not isinstance(results, list):
+                return fallback
+
+            cluster_ids  = {t["cluster_id"] for t in templates}
+            template_map = {t["cluster_id"]: t["template"] for t in templates}
+
+            out = []
+            for r in results:
+                cid = str(r.get("cluster_id", ""))
+                if cid not in cluster_ids:
+                    continue
+                orig    = template_map.get(cid, "")
+                labeled = r.get("labeled_template", "")
+                if not labeled or not self.validate_labeled_template(orig, labeled):
+                    r["labeled_template"] = orig.replace("<*>", "<unknown>")
+                r["cluster_id"] = cid
+                out.append(r)
+
+            # fill in any templates the LLM forgot
+            returned_ids = {r["cluster_id"] for r in out}
+            for t in templates:
+                if t["cluster_id"] not in returned_ids:
+                    out.append({
+                        "cluster_id":      t["cluster_id"],
+                        "decision":        "keep",
+                        "labeled_template": t["template"].replace("<*>", "<unknown>"),
+                        "reasoning":       "not_returned_by_llm",
+                        "quality":         {"score": None, "issues": [], "suggestion": ""},
+                    })
+
+            return out
+
+        except Exception as exc:
+            print(f"[LLMGate] batch error: {exc}")
+            return fallback
+
     # ------------------------------------------------------------------
     # API call
     # ------------------------------------------------------------------
