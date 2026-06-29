@@ -113,15 +113,10 @@ class LLMGate:
             "  - Provide a merged_template that generalises both using '<*>' for variable tokens.\n"
             "  - If no good merge exists, choose 'keep'.\n\n"
             f"{_WILDCARD_LABELING_INSTRUCTION}\n"
-            "Quality scoring: evaluate the template and set quality.score 0-10 (10=perfect),\n"
-            "  quality.issues from: too_generic, timestamp_not_masked, over_wildcarded,\n"
-            "  missing_field_labels, should_split, looks_good\n"
-            "  quality.suggestion: one-line improvement if score < 8, else empty string.\n\n"
             "Respond ONLY with valid JSON in this exact shape (no markdown, no extra text):\n"
             '{"decision": "merge" | "keep", "target_cluster_id": "string or null", '
             '"merged_template": "string or null", '
-            '"labeled_template": "string — template with named wildcards", "reasoning": "string", '
-            '"quality": {"score": 0, "issues": [], "suggestion": ""}}'
+            '"labeled_template": "string — template with named wildcards", "reasoning": "string"}'
         )
 
     def build_prompt_degradation(
@@ -144,15 +139,10 @@ class LLMGate:
             "             Provide a tighter reset_template string using '<*>' only where needed.\n"
             "  'keep'   — the wildcard ratio is acceptable given the sample diversity.\n\n"
             f"{_WILDCARD_LABELING_INSTRUCTION}\n"
-            "Quality scoring: evaluate the template and set quality.score 0-10 (10=perfect),\n"
-            "  quality.issues from: too_generic, timestamp_not_masked, over_wildcarded,\n"
-            "  missing_field_labels, should_split, looks_good\n"
-            "  quality.suggestion: one-line improvement if score < 8, else empty string.\n\n"
             "Respond ONLY with valid JSON in this exact shape (no markdown, no extra text):\n"
             '{"decision": "split" | "reset" | "keep", "sub_templates": ["string"] or [], '
             '"reset_template": "string or null", '
-            '"labeled_template": "string — template with named wildcards", "reasoning": "string", '
-            '"quality": {"score": 0, "issues": [], "suggestion": ""}}'
+            '"labeled_template": "string — template with named wildcards", "reasoning": "string"}'
         )
 
     def build_prompt_batch(self, templates: list[dict], prior_decisions: dict | None = None) -> str:
@@ -203,7 +193,6 @@ class LLMGate:
             '      "sub_templates": [],\n'
             '      "reset_template": "string or null — only if decision=reset",\n'
             '      "labeled_template": "string — template with OCSF field path labels",\n'
-            '      "quality": {"score": 0, "issues": [], "suggestion": ""},\n'
             '      "reasoning": "string — one sentence"\n'
             '    }\n'
             '  ]\n'
@@ -231,7 +220,6 @@ class LLMGate:
                     "decision":         "keep",
                     "labeled_template": t["template"].replace("<*>", "<unknown>"),
                     "reasoning":        reason,
-                    "quality":          {"score": None, "issues": [], "suggestion": ""},
                 }
                 for t in chunk
             ]
@@ -282,7 +270,6 @@ class LLMGate:
                         "decision":         "keep",
                         "labeled_template": t["template"].replace("<*>", "<unknown>"),
                         "reasoning":        "not_returned_by_llm",
-                        "quality":          {"score": None, "issues": [], "suggestion": ""},
                     })
 
             return out
@@ -306,7 +293,7 @@ class LLMGate:
                         all_results.extend(_call_chunk(chunk))
                     except Exception:
                         print(f"[llm_gate] 429 retry failed for chunk, using fallback", flush=True)
-                        all_results.extend([{"cluster_id": t["cluster_id"], "decision": "keep", "reasoning": "rate_limited", "labeled_template": t["template"], "quality": {"score": None, "issues": [], "suggestion": ""}} for t in chunk])
+                        all_results.extend([{"cluster_id": t["cluster_id"], "decision": "keep", "reasoning": "rate_limited", "labeled_template": t["template"]} for t in chunk])
                 else:
                     print(f"[llm_gate] call_batch ERROR on chunk {idx}: {exc}", flush=True)
                     import traceback; traceback.print_exc()

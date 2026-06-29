@@ -204,11 +204,6 @@ h2 { font-size: 13px; font-weight: 600; letter-spacing: -0.2px; }
 .ocsf-sec   { background: rgba(239,68,68,.2);   color: #fca5a5; }
 .ocsf-other { background: rgba(100,116,139,.2); color: #94a3b8; }
 
-/* ── quality badge ── */
-.q-badge { font-size: 10px; font-weight: 600; padding: 2px 6px; border-radius: 10px; }
-.q-high   { background: rgba(34,197,94,.2);  color: var(--green); }
-.q-mid    { background: rgba(234,179,8,.2);  color: var(--yellow); }
-.q-low    { background: rgba(239,68,68,.2);  color: var(--red); }
 
 /* ── label tokens ── */
 .lbl { display: inline-block; background: #1e293b; color: #818cf8; border-radius: 3px; padding: 1px 5px; font-family: monospace; font-size: 11px; margin: 0 1px; }
@@ -417,7 +412,6 @@ tbody tr:hover td { background: rgba(255,255,255,.018); }
             <th>Cluster</th>
             <th>OCSF Class</th>
             <th class="tpl-col">Template Evolution</th>
-            <th>Quality</th>
           </tr>
         </thead>
         <tbody id="results-tbody">
@@ -443,7 +437,6 @@ tbody tr:hover td { background: rgba(255,255,255,.018); }
               <th>Cluster</th>
               <th>Pattern</th>
               <th>Labeled</th>
-              <th>Quality</th>
               <th>Decision</th>
               <th>Ver.</th>
               <th>Status</th>
@@ -514,12 +507,6 @@ function renderLabeled(tpl) {
   return esc(tpl).replace(/&lt;(\w+)&gt;/g, '<span class="lbl">&lt;$1&gt;</span>');
 }
 
-function qualityBadge(score) {
-  if (score == null) return '—';
-  if (score >= 8) return `<span class="q-badge q-high">${score}/10</span>`;
-  if (score >= 5) return `<span class="q-badge q-mid">${score}/10</span>`;
-  return `<span class="q-badge q-low">${score}/10</span>`;
-}
 
 const OCSF_CLASS_CSS = {
   'SSH Activity': 'ocsf-ssh', 'SSH': 'ocsf-ssh',
@@ -750,7 +737,6 @@ function renderResults(results, sessionId) {
       <td class="mono" style="font-size:11px;color:var(--muted);">${esc(cid)}</td>
       <td>${ocsfPill(ocsfName)}</td>
       <td class="tpl-cell">${tplHTML}${tooltipHTML}</td>
-      <td>${qualityBadge(r.quality_score ?? null)}</td>
     `;
 
     // fetch samples lazily on hover
@@ -1150,7 +1136,6 @@ function renderTemplates(templates) {
       <td class="mono" style="font-size:11px;">${esc(t.cluster_id)}</td>
       <td class="mono" style="font-size:10px;color:var(--muted);max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${esc(t.pattern)}">${esc(t.pattern)}</td>
       <td style="font-size:11px;">${renderLabeled(t.labeled_template)}</td>
-      <td>${qualityBadge(t.quality_score)}</td>
       <td>${decHTML}</td>
       <td style="color:var(--muted);font-size:11px;">${t.versions ?? 0}</td>
       <td><span class="ct ct-${t.status === 'ACTIVE' ? 'CREATE' : 'NONE'}" style="font-size:9px;">${esc(t.status)}</span></td>

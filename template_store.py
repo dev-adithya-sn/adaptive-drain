@@ -25,9 +25,6 @@ class ManagedTemplate:
     labeled_template:   str | None = None
     llm_decision:       str | None = None
     llm_reasoning:      str | None = None
-    quality_score:      int | None = None
-    quality_issues:     list = field(default_factory=list)
-    quality_suggestion: str | None = None
     versions:           list = field(default_factory=list)
 
 

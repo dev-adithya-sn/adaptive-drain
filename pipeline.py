@@ -169,16 +169,6 @@ class TemplatePipeline:
         t.labeled_template   = dec.get("labeled_template")
         t.llm_decision       = decision
         t.llm_reasoning      = dec.get("reasoning", "")
-        quality              = dec.get("quality") or {}
-        raw_score = quality.get("score")
-        if raw_score is not None:
-            try:
-                raw_score = max(0, min(10, int(float(raw_score))))
-            except (TypeError, ValueError):
-                raw_score = None
-        t.quality_score      = raw_score
-        t.quality_issues     = quality.get("issues", [])
-        t.quality_suggestion = quality.get("suggestion", "")
 
         if decision == "merge":
             target_id  = str(dec.get("merge_into_cluster_id") or "")
@@ -369,13 +359,11 @@ class TemplatePipeline:
     # Re-evaluation
     # ------------------------------------------------------------------
 
-    def reevaluate_all(self, min_score: int = 10) -> int:
+    def reevaluate_all(self) -> int:
         """Re-evaluate ACTIVE templates via batch LLM call. Returns count queued."""
         try:
             to_review = []
             for t in self.store.all_active():
-                if min_score > 0 and t.quality_score is not None and t.quality_score >= min_score:
-                    continue
                 tokens = t.pattern.split()
                 wc     = sum(1 for tok in tokens if tok == "<*>")
                 to_review.append({
@@ -385,7 +373,7 @@ class TemplatePipeline:
                     "wildcard_ratio": wc / max(len(tokens), 1),
                 })
 
-            print(f"[reevaluate] active templates: {len(list(self.store.all_active()))}, to_review: {len(to_review)}, min_score={min_score}", flush=True)
+            print(f"[reevaluate] active templates: {len(list(self.store.all_active()))}, to_review: {len(to_review)}", flush=True)
 
             if not to_review:
                 return 0

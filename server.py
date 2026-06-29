@@ -133,9 +133,7 @@ def upload():
 
 @app.route("/templates/reevaluate", methods=["POST"])
 def reevaluate_templates():
-    body      = request.get_json() or {}
-    min_score = body.get("min_score", 10)
-    queued    = pipeline.reevaluate_all(min_score=min_score)
+    queued = pipeline.reevaluate_all()
     return jsonify({"queued": queued})
 
 
@@ -197,9 +195,6 @@ def get_templates():
             "labeled_template":   t.labeled_template,
             "llm_decision":       t.llm_decision,
             "llm_reasoning":      t.llm_reasoning,
-            "quality_score":      t.quality_score,
-            "quality_issues":     t.quality_issues,
-            "quality_suggestion": t.quality_suggestion,
             "versions":           len(t.versions),
             "status":             t.status.value,
             "created_at":         t.created_at,
