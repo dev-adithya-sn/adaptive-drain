@@ -285,6 +285,8 @@ class LLMGate:
             return out
 
         except Exception as exc:
+            print(f"[llm_gate] call_batch ERROR: {exc}", flush=True)
+            import traceback; traceback.print_exc()
             print(f"[LLMGate] batch error: {exc}")
             return fallback
 
@@ -317,6 +319,8 @@ class LLMGate:
                 result = self._apply_labeled_template(result, original_template)
             return result
         except Exception as exc:
+            print(f"[llm_gate] inner ERROR: {exc}", flush=True)
+            import traceback; traceback.print_exc()
             print(f"[LLMGate] error: {exc}")
             return dict(_FALLBACK_KEEP)
 
@@ -341,7 +345,8 @@ class LLMGate:
                         return False
 
             return True
-        except Exception:
+        except Exception as exc:
+            print(f"[llm_gate] parse ERROR: {exc}", flush=True)
             return False
 
     def _apply_labeled_template(self, decision: dict, original_template: str) -> dict:
@@ -365,6 +370,7 @@ class LLMGate:
         try:
             return json.loads(stripped)
         except json.JSONDecodeError as exc:
+            print(f"[llm_gate] JSON parse ERROR: {exc}", flush=True)
             print(f"[LLMGate] JSON parse error: {exc} | raw: {stripped[:200]}")
             return dict(_FALLBACK_KEEP)
 
