@@ -310,11 +310,14 @@ class TemplatePipeline:
                     "wildcard_ratio": wc / max(len(tokens), 1),
                 })
 
+            print(f"[reevaluate] active templates: {len(list(self.store.all_active()))}, to_review: {len(to_review)}, min_score={min_score}", flush=True)
+
             if not to_review:
                 return 0
 
             self._bump("llm_calls")
             decisions = self.llm_gate.call_batch(to_review, prior_decisions=self._llm_decision_cache)
+            print(f"[reevaluate] decisions received: {len(decisions)}", flush=True)
 
             if self.approver and hasattr(self.approver, "set_batch"):
                 import uuid
@@ -331,6 +334,7 @@ class TemplatePipeline:
                 }
             return len(decisions)
         except Exception:
+            import traceback; traceback.print_exc()
             return 0
 
     # ------------------------------------------------------------------
