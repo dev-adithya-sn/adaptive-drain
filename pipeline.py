@@ -204,55 +204,70 @@ class TemplatePipeline:
         samples  = self.sampler.get(cid)
         for raw_log in samples:
             try:
+                # Always run classify_template once per template for enrichment
+                if template not in self._ocsf_classify_cache:
+                    raw_samples = self.sampler.get(cid)[:3]
+                    self._ocsf_classify_cache[template] = self.llm_gate.classify_template(template, raw_samples)
+                cached = self._ocsf_classify_cache.get(template, {})
+
+                # Use OCSF rule match for class/activity/severity if available
                 ocsf_label = self.normalizer.normalize(template)
-                if ocsf_label is None:
-                    # Check classify cache first
-                    if template not in self._ocsf_classify_cache:
-                        samples = self.sampler.get(cid)[:3]
-                        self._ocsf_classify_cache[template] = self.llm_gate.classify_template(template, samples)
-                    ocsf_label = self._ocsf_classify_cache[template]
-                ocsf_full = self.normalizer.normalize_full(raw_log, template) if self.normalizer.normalize(template) else {}
-                if not ocsf_full and ocsf_label:
-                    # Build minimal event from LLM classification
-                    import uuid as _uuid
+                ocsf_full  = self.normalizer.normalize_full(raw_log, template) if ocsf_label else {}
+
+                # Use regex_pattern from LLM to extract fields if available
+                llm_regex = cached.get("regex_pattern", "")
+                llm_fields_extracted = {}
+                if llm_regex:
+                    try:
+                        import re as _re
+                        m = _re.search(llm_regex, raw_log)
+                        if m:
+                            llm_fields_extracted = m.groupdict()
+                    except Exception:
+                        pass
+
+                # Merge LLM fields with regex extracted fields
+                llm_fields = {**cached.get("fields", {}), **llm_fields_extracted}
+
+                if not ocsf_full:
                     ocsf_full = {
-                        "class_name":    ocsf_label.get("ocsf_class_name", "Unknown"),
-                        "activity_name": ocsf_label.get("activity_name", "Unknown"),
-                        "category_name": ocsf_label.get("category_name", "Other"),
-                        "severity_id":   ocsf_label.get("severity_id", 1),
-                        "severity":      {1:"Informational",2:"Low",3:"Medium",4:"High",5:"Critical"}.get(ocsf_label.get("severity_id",1),"Unknown"),
+                        "class_name":    cached.get("ocsf_class_name", "Unknown"),
+                        "activity_name": cached.get("activity_name", "Unknown"),
+                        "category_name": cached.get("category_name", "Other"),
+                        "severity_id":   cached.get("severity_id", 1),
+                        "severity":      {1:"Informational",2:"Low",3:"Medium",4:"High",5:"Critical"}.get(cached.get("severity_id",1),"Unknown"),
                         "status":        "",
                         "message":       raw_log,
                         "raw_data":      raw_log,
                     }
-                ocsf       = ocsf_full or {}
-                cached = self._ocsf_classify_cache.get(template, {})
+                ocsf = ocsf_full or {}
                 entry = {
                     "raw_log":      raw_log,
                     "template":     template,
                     "cluster_id":   cid,
-                    "ocsf_class":   ocsf.get("class_name", ""),
-                    "activity":     ocsf.get("activity_name", ""),
-                    "severity":     ocsf.get("severity", ""),
+                    "ocsf_class":   ocsf.get("class_name", "") or cached.get("ocsf_class_name", ""),
+                    "activity":     ocsf.get("activity_name", "") or cached.get("activity_name", ""),
+                    "severity":     ocsf.get("severity", "") or {1:"Informational",2:"Low",3:"Medium",4:"High",5:"Critical"}.get(cached.get("severity_id",1),""),
                     "status":       ocsf.get("status", ""),
-                    "username":     (ocsf.get("user") or {}).get("name", ""),
-                    "src_ip":       (ocsf.get("src_endpoint") or {}).get("ip", ""),
-                    "dst_ip":       (ocsf.get("dst_endpoint") or {}).get("ip", ""),
-                    "src_port":     (ocsf.get("src_endpoint") or {}).get("port", ""),
-                    "http_method":  (ocsf.get("http_request") or {}).get("http_method", ""),
-                    "http_path":    (ocsf.get("http_request") or {}).get("url", {}).get("path", ""),
-                    "http_status":  (ocsf.get("http_response") or {}).get("code", ""),
-                    "db_name":      (ocsf.get("database") or {}).get("name", ""),
-                    "service":      (ocsf.get("service") or {}).get("name", ""),
-                    "ingested_at":  int(time.time() * 1000),
-                    "log_source":      cached.get("log_source", ""),
-                    "vendor":          cached.get("vendor", ""),
-                    "semantic_event":  cached.get("semantic_event", ""),
+                    "username":     llm_fields_extracted.get("username") or (ocsf.get("user") or {}).get("name", "") or llm_fields.get("username", ""),
+                    "src_ip":       llm_fields_extracted.get("src_ip") or (ocsf.get("src_endpoint") or {}).get("ip", "") or llm_fields.get("src_ip", ""),
+                    "dst_ip":       llm_fields_extracted.get("dst_ip") or (ocsf.get("dst_endpoint") or {}).get("ip", "") or llm_fields.get("dst_ip", ""),
+                    "src_port":     llm_fields_extracted.get("src_port") or (ocsf.get("src_endpoint") or {}).get("port", "") or llm_fields.get("src_port", ""),
+                    "http_method":  llm_fields_extracted.get("http_method") or (ocsf.get("http_request") or {}).get("http_method", "") or llm_fields.get("http_method", ""),
+                    "http_path":    llm_fields_extracted.get("http_path") or (ocsf.get("http_request") or {}).get("url", {}).get("path", "") or llm_fields.get("http_path", ""),
+                    "http_status":  llm_fields_extracted.get("http_status") or (ocsf.get("http_response") or {}).get("code", "") or llm_fields.get("http_status", ""),
+                    "db_name":      llm_fields_extracted.get("db_name") or (ocsf.get("database") or {}).get("name", "") or llm_fields.get("db_name", ""),
+                    "service":      llm_fields_extracted.get("service") or (ocsf.get("service") or {}).get("name", "") or llm_fields.get("service", ""),
+                    "log_source":   cached.get("log_source", ""),
+                    "vendor":       cached.get("vendor", ""),
+                    "semantic_event": cached.get("semantic_event", ""),
                     "security_relevant": cached.get("security_relevant", False),
-                    "storage_class":   cached.get("storage_class", "hot"),
+                    "storage_class":  cached.get("storage_class", "hot"),
                     "mitre_techniques": cached.get("mitre_attack_techniques", []),
                     "detection_tags":  cached.get("detection_tags", []),
                     "telemetry_type":  cached.get("telemetry_type", ""),
+                    "entities":     cached.get("entities", {}),
+                    "ingested_at":  int(time.time() * 1000),
                 }
                 self._parsed_logs.append(entry)
             except Exception:
