@@ -468,6 +468,36 @@ tbody tr:hover td { background: rgba(255,255,255,.018); }
     </div>
 
   </div>
+
+  <!-- PARSED LOGS -->
+  <div class="card" id="parsed-logs-card" style="margin-top:14px;">
+    <div class="card-header">
+      <h2>Parsed Logs</h2>
+      <span class="badge zero" id="parsed-badge">0</span>
+    </div>
+    <div style="overflow-x:auto;border-radius:6px;border:1px solid var(--border);max-height:400px;overflow-y:auto;">
+      <table style="width:100%;border-collapse:collapse;font-size:11px;">
+        <thead>
+          <tr style="background:var(--surface2);position:sticky;top:0;z-index:1;">
+            <th style="padding:6px 8px;text-align:left;color:var(--muted);font-weight:500;white-space:nowrap;">Raw Log</th>
+            <th style="padding:6px 8px;text-align:left;color:var(--muted);font-weight:500;white-space:nowrap;">Class</th>
+            <th style="padding:6px 8px;text-align:left;color:var(--muted);font-weight:500;white-space:nowrap;">Activity</th>
+            <th style="padding:6px 8px;text-align:left;color:var(--muted);font-weight:500;white-space:nowrap;">Severity</th>
+            <th style="padding:6px 8px;text-align:left;color:var(--muted);font-weight:500;white-space:nowrap;">Status</th>
+            <th style="padding:6px 8px;text-align:left;color:var(--muted);font-weight:500;white-space:nowrap;">User</th>
+            <th style="padding:6px 8px;text-align:left;color:var(--muted);font-weight:500;white-space:nowrap;">Src IP</th>
+            <th style="padding:6px 8px;text-align:left;color:var(--muted);font-weight:500;white-space:nowrap;">HTTP</th>
+            <th style="padding:6px 8px;text-align:left;color:var(--muted);font-weight:500;white-space:nowrap;">DB</th>
+            <th style="padding:6px 8px;text-align:left;color:var(--muted);font-weight:500;white-space:nowrap;">Service</th>
+          </tr>
+        </thead>
+        <tbody id="parsed-tbody">
+          <tr><td colspan="10" class="empty-state" style="padding:18px 0;">No logs yet.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
 </div>
 
 <script>
@@ -566,6 +596,7 @@ async function upload(file) {
     renderResults(data.results, data.session_id);
     // refresh events after upload
     loadEvents();
+    loadParsedLogs();
   } catch(err) {
     setStatus(err.message, 'err');
   } finally {
@@ -639,6 +670,7 @@ function renderReport(r) {
   } else {
     umWrap.style.display = 'none';
   }
+  loadParsedLogs();
 }
 
 // ── results table ────────────────────────────────────────────────────────────
@@ -1167,6 +1199,48 @@ async function toggleVersionHistory(tr, cid) {
   }
 }
 
+// ── Parsed logs ───────────────────────────────────────────────────────────────
+function renderParsedLogs(logs) {
+  const tbody  = document.getElementById('parsed-tbody');
+  const badge  = document.getElementById('parsed-badge');
+  badge.textContent = logs.length;
+  badge.className   = logs.length > 0 ? 'badge' : 'badge zero';
+  if (!logs.length) {
+    tbody.innerHTML = '<tr><td colspan="10" class="empty-state" style="padding:18px 0;">No logs yet.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = logs.slice().reverse().map(l => {
+    const http = [l.http_method, l.http_path, l.http_status].filter(Boolean).join(' ');
+    const db   = l.db_name || '';
+    const sev  = l.severity === 'High' || l.severity === 'Critical'
+      ? `<span style="color:#f87171;">${esc(l.severity)}</span>`
+      : `<span style="color:#86efac;">${esc(l.severity)}</span>`;
+    const sta  = l.status === 'Failure'
+      ? `<span style="color:#f87171;">Failure</span>`
+      : `<span style="color:#86efac;">${esc(l.status)}</span>`;
+    return `<tr style="border-top:1px solid var(--border);">
+      <td style="padding:5px 8px;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:monospace;" title="${esc(l.raw_log)}">${esc(l.raw_log)}</td>
+      <td style="padding:5px 8px;white-space:nowrap;">${esc(l.ocsf_class)}</td>
+      <td style="padding:5px 8px;white-space:nowrap;">${esc(l.activity)}</td>
+      <td style="padding:5px 8px;white-space:nowrap;">${sev}</td>
+      <td style="padding:5px 8px;white-space:nowrap;">${sta}</td>
+      <td style="padding:5px 8px;font-family:monospace;">${esc(l.username)}</td>
+      <td style="padding:5px 8px;font-family:monospace;">${esc(l.src_ip)}</td>
+      <td style="padding:5px 8px;font-family:monospace;">${esc(http)}</td>
+      <td style="padding:5px 8px;font-family:monospace;">${esc(db)}</td>
+      <td style="padding:5px 8px;font-family:monospace;">${esc(l.service)}</td>
+    </tr>`;
+  }).join('');
+}
+
+async function loadParsedLogs() {
+  try {
+    const res  = await fetch('/parsed-logs?n=100');
+    const data = await res.json();
+    renderParsedLogs(data.logs || []);
+  } catch(_) {}
+}
+
 // ── OCSF events ───────────────────────────────────────────────────────────────
 async function loadEvents() {
   try {
@@ -1300,11 +1374,13 @@ pollDecisions();
 pollStats();
 loadTemplates();
 loadEvents();
+loadParsedLogs();
 
 setInterval(pollDecisions,  3000);
 setInterval(pollStats,      5000);
 setInterval(loadTemplates, 10000);
 setInterval(loadEvents,    10000);
+setInterval(loadParsedLogs, 5000);
 </script>
 </body>
 </html>

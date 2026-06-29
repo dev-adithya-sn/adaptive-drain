@@ -237,6 +237,15 @@ def get_events():
     return jsonify({"events": events[-n:]})
 
 
+@app.route("/parsed-logs", methods=["GET"])
+def get_parsed_logs():
+    """Return the last 100 parsed logs with extracted fields."""
+    n = min(int(request.args.get("n", 100)), 100)
+    if not hasattr(pipeline, "_parsed_logs") or not pipeline._parsed_logs:
+        return jsonify({"logs": []})
+    return jsonify({"logs": list(pipeline._parsed_logs)[-n:]})
+
+
 @app.route("/stats", methods=["GET"])
 def get_stats():
     snap = metrics.snapshot()

@@ -1,6 +1,7 @@
 """Main orchestrator — wires all AdaptiveDrain modules and runs batch LLM review."""
 
 from __future__ import annotations
+import time
 from typing import Any
 
 from approver import HumanApprover
@@ -44,6 +45,8 @@ class TemplatePipeline:
 
         self.splitter = TemplateSplitter(self.drain_adapter, self.store, self.sampler)
         self._llm_decision_cache: dict[str, dict] = {}
+        from collections import deque
+        self._parsed_logs: deque = deque(maxlen=100)
 
     def _bump(self, counter: str, by: int = 1) -> None:
         if self.metrics is not None:
@@ -89,6 +92,29 @@ class TemplatePipeline:
         else:
             result["ocsf"]       = None
             result["ocsf_event"] = None
+
+        # Build flat parsed log entry
+        ocsf = result.get("ocsf_event") or {}
+        entry = {
+            "raw_log":      raw_log,
+            "template":     template,
+            "cluster_id":   cluster_id,
+            "ocsf_class":   ocsf.get("class_name", ""),
+            "activity":     ocsf.get("activity_name", ""),
+            "severity":     ocsf.get("severity", ""),
+            "status":       ocsf.get("status", ""),
+            "username":     (ocsf.get("user") or {}).get("name", ""),
+            "src_ip":       (ocsf.get("src_endpoint") or {}).get("ip", ""),
+            "dst_ip":       (ocsf.get("dst_endpoint") or {}).get("ip", ""),
+            "src_port":     (ocsf.get("src_endpoint") or {}).get("port", ""),
+            "http_method":  (ocsf.get("http_request") or {}).get("http_method", ""),
+            "http_path":    (ocsf.get("http_request") or {}).get("url", {}).get("path", ""),
+            "http_status":  (ocsf.get("http_response") or {}).get("code", ""),
+            "db_name":      (ocsf.get("database") or {}).get("name", ""),
+            "service":      (ocsf.get("service") or {}).get("name", ""),
+            "ingested_at":  int(time.time() * 1000),
+        }
+        self._parsed_logs.append(entry)
 
         return result
 
@@ -355,6 +381,7 @@ class TemplatePipeline:
 
         # Clear LLM decision cache
         self._llm_decision_cache.clear()
+        self._parsed_logs.clear()
 
         # Clear approver batches if present
         if self.approver and hasattr(self.approver, '_batches'):
