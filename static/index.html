@@ -147,7 +147,9 @@ h2 { font-size: 13px; font-weight: 600; letter-spacing: -0.2px; }
 .batch-table.open { display: block; }
 .batch-table table { width: 100%; border-collapse: collapse; font-size: 11px; }
 .batch-table th { color: var(--muted); font-weight: 500; padding: 4px 6px; border-bottom: 1px solid var(--border); text-align: left; white-space: nowrap; }
-.batch-table td { padding: 4px 6px; border-bottom: 1px solid rgba(42,45,62,.5); vertical-align: top; }
+.batch-table td { padding: 6px 8px; border-bottom: 1px solid rgba(42,45,62,.5); vertical-align: top; }
+.batch-table .col-reasoning { min-width: 200px; white-space: normal; word-break: break-word; color: var(--muted); font-size: 11px; }
+.batch-table .col-labeled   { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: monospace; }
 .batch-table tr:last-child td { border-bottom: none; }
 .dec-edit-area { display: none; flex-direction: column; gap: 4px; margin-top: 4px; }
 .dec-edit-area.open { display: flex; }
@@ -795,15 +797,20 @@ function renderBatches(batches) {
 
     // build expanded table rows
     const rows = (b.decisions || []).map((d, i) => {
-      const dt  = d.decision || 'keep';
-      const lbl = d.labeled_template || d.template || '';
-      const reason = (d.reasoning || '').substring(0, 100);
+      const dt        = d.decision || 'keep';
+      const lbl       = d.labeled_template || d.template || '';
+      const reasoning = d.reasoning || '';
+      const short     = reasoning.substring(0, 100);
+      const needsMore = reasoning.length > 100;
+      const reasoningHtml = needsMore
+        ? `<span data-full="${esc(reasoning)}" data-short="${esc(short)}" data-expanded="false">${esc(short)}<a href="#" onclick="toggleReasoning(this.parentElement);return false;" style="color:#6366f1;font-size:10px;"> more</a></span>`
+        : `<span>${esc(reasoning)}</span>`;
       const mergeInfo = dt === 'merge' ? ` → ${esc(d.merge_into_cluster_id || '')}` : '';
       return `<tr data-row-cid="${esc(d.cluster_id)}">
         <td style="font-family:monospace;color:var(--muted);white-space:nowrap;">${esc(d.cluster_id)}</td>
         <td><span class="d-badge ${decBadgeCls(dt)}">${dt}${mergeInfo}</span></td>
-        <td style="font-family:monospace;max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${esc(lbl)}">${esc(lbl)}</td>
-        <td style="color:var(--muted);max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${esc(reason)}">${esc(reason)}</td>
+        <td class="col-labeled" title="${esc(lbl)}">${esc(lbl)}</td>
+        <td class="col-reasoning">${reasoningHtml}</td>
         <td>
           <button class="btn btn-ghost" style="font-size:10px;padding:2px 6px;"
             onclick="toggleRowEdit(this,'${b.batch_id}','${esc(d.cluster_id)}',${i})">&#9998;</button>
@@ -1135,6 +1142,19 @@ async function reevaluatePoor() {
     const data = await res.json();
     alert(`Queued ${data.queued} template${data.queued !== 1 ? 's' : ''} with score < 6 for re-evaluation`);
   } catch(_) {}
+}
+
+// ── reasoning expand/collapse ─────────────────────────────────────────────────
+function toggleReasoning(el) {
+  const full  = el.dataset.full;
+  const short = el.dataset.short;
+  if (el.dataset.expanded === 'true') {
+    el.innerHTML = esc(short) + ' <a href="#" onclick="toggleReasoning(this.parentElement);return false;" style="color:#6366f1;font-size:10px;">more</a>';
+    el.dataset.expanded = 'false';
+  } else {
+    el.innerHTML = esc(full) + ' <a href="#" onclick="toggleReasoning(this.parentElement);return false;" style="color:#6366f1;font-size:10px;">less</a>';
+    el.dataset.expanded = 'true';
+  }
 }
 
 // ── stats collapse ────────────────────────────────────────────────────────────
