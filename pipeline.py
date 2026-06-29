@@ -337,6 +337,21 @@ class TemplatePipeline:
             import traceback; traceback.print_exc()
             return 0
 
+    def reset(self) -> None:
+        """Wipe all in-memory state — templates, decisions, samples, metrics, events."""
+        self.store._store.clear()
+        self.sampler._samples.clear()
+        self.drain_adapter.drain.drain_tree = self.drain_adapter.drain.__class__.__new__(self.drain_adapter.drain.__class__)
+        self.drain_adapter.drain.__init__()
+        self._llm_decision_cache.clear()
+        if self.approver and hasattr(self.approver, '_batches'):
+            self.approver._batches.clear()
+        if self.metrics:
+            self.metrics._counters.clear()
+        if self.normalizer and hasattr(self.normalizer, '_events'):
+            self.normalizer._events.clear()
+        print("[pipeline] state reset on page load", flush=True)
+
     # ------------------------------------------------------------------
     # Observability
     # ------------------------------------------------------------------
