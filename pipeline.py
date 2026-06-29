@@ -85,36 +85,12 @@ class TemplatePipeline:
 
         if self.normalizer is not None:
             ocsf_label = self.normalizer.normalize(template)
-            ocsf_full  = self.normalizer.normalize_full(raw_log, template) if ocsf_label else None
             result["ocsf"]       = ocsf_label
-            result["ocsf_event"] = ocsf_full
+            result["ocsf_event"] = None
             self._bump("ocsf_matched" if ocsf_label is not None else "ocsf_unmatched")
         else:
             result["ocsf"]       = None
             result["ocsf_event"] = None
-
-        # Build flat parsed log entry
-        ocsf = result.get("ocsf_event") or {}
-        entry = {
-            "raw_log":      raw_log,
-            "template":     template,
-            "cluster_id":   cluster_id,
-            "ocsf_class":   ocsf.get("class_name", ""),
-            "activity":     ocsf.get("activity_name", ""),
-            "severity":     ocsf.get("severity", ""),
-            "status":       ocsf.get("status", ""),
-            "username":     (ocsf.get("user") or {}).get("name", ""),
-            "src_ip":       (ocsf.get("src_endpoint") or {}).get("ip", ""),
-            "dst_ip":       (ocsf.get("dst_endpoint") or {}).get("ip", ""),
-            "src_port":     (ocsf.get("src_endpoint") or {}).get("port", ""),
-            "http_method":  (ocsf.get("http_request") or {}).get("http_method", ""),
-            "http_path":    (ocsf.get("http_request") or {}).get("url", {}).get("path", ""),
-            "http_status":  (ocsf.get("http_response") or {}).get("code", ""),
-            "db_name":      (ocsf.get("database") or {}).get("name", ""),
-            "service":      (ocsf.get("service") or {}).get("name", ""),
-            "ingested_at":  int(time.time() * 1000),
-        }
-        self._parsed_logs.append(entry)
 
         return result
 
@@ -220,6 +196,41 @@ class TemplatePipeline:
                 self.drain_adapter.update_template(cid, reset_tpl.split())
                 t.pattern = reset_tpl
 
+    def _parse_cluster_logs(self, cid: str) -> None:
+        """Parse all sampled logs for a confirmed template and push to _parsed_logs."""
+        t = self.store.get(cid)
+        if not t or not self.normalizer:
+            return
+        template = t.labeled_template or t.pattern
+        samples  = self.sampler.get(cid)
+        for raw_log in samples:
+            try:
+                ocsf_label = self.normalizer.normalize(template)
+                ocsf_full  = self.normalizer.normalize_full(raw_log, template) if ocsf_label else {}
+                ocsf       = ocsf_full or {}
+                entry = {
+                    "raw_log":      raw_log,
+                    "template":     template,
+                    "cluster_id":   cid,
+                    "ocsf_class":   ocsf.get("class_name", ""),
+                    "activity":     ocsf.get("activity_name", ""),
+                    "severity":     ocsf.get("severity", ""),
+                    "status":       ocsf.get("status", ""),
+                    "username":     (ocsf.get("user") or {}).get("name", ""),
+                    "src_ip":       (ocsf.get("src_endpoint") or {}).get("ip", ""),
+                    "dst_ip":       (ocsf.get("dst_endpoint") or {}).get("ip", ""),
+                    "src_port":     (ocsf.get("src_endpoint") or {}).get("port", ""),
+                    "http_method":  (ocsf.get("http_request") or {}).get("http_method", ""),
+                    "http_path":    (ocsf.get("http_request") or {}).get("url", {}).get("path", ""),
+                    "http_status":  (ocsf.get("http_response") or {}).get("code", ""),
+                    "db_name":      (ocsf.get("database") or {}).get("name", ""),
+                    "service":      (ocsf.get("service") or {}).get("name", ""),
+                    "ingested_at":  int(time.time() * 1000),
+                }
+                self._parsed_logs.append(entry)
+            except Exception:
+                pass
+
     def execute_batch(self, batch_id: str, reparse: bool = False) -> dict:
         """Execute all approved decisions for a batch.
 
@@ -235,6 +246,7 @@ class TemplatePipeline:
         for dec in decisions:
             try:
                 self._execute_decision(dec)
+                self._parse_cluster_logs(str(dec.get("cluster_id", "")))
             except Exception as e:
                 print(f"[pipeline] execute_decision error: {e}")
 
