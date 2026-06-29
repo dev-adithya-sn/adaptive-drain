@@ -342,24 +342,30 @@ tbody tr:hover td { background: rgba(255,255,255,.018); }
 
     <!-- Stats -->
     <div class="card">
-      <div class="card-header"><h2>Pipeline Stats</h2></div>
-      <div class="stats-grid">
-        <div class="stat-cell"><div class="stat-label">Logs In</div><div class="stat-val" id="s-logs_ingested">—</div></div>
-        <div class="stat-cell"><div class="stat-label">Created</div><div class="stat-val" id="s-templates_created">—</div></div>
-        <div class="stat-cell"><div class="stat-label">Updated</div><div class="stat-val" id="s-templates_updated">—</div></div>
-        <div class="stat-cell"><div class="stat-label">Merged</div><div class="stat-val" id="s-templates_merged">—</div></div>
-        <div class="stat-cell"><div class="stat-label">Split</div><div class="stat-val" id="s-templates_split">—</div></div>
-        <div class="stat-cell"><div class="stat-label">LLM Calls</div><div class="stat-val" id="s-llm_calls">—</div></div>
-        <div class="stat-cell"><div class="stat-label">LLM Err</div><div class="stat-val" id="s-llm_errors">—</div></div>
-        <div class="stat-cell"><div class="stat-label">OCSF ✓</div><div class="stat-val" id="s-ocsf_matched">—</div></div>
-        <div class="stat-cell"><div class="stat-label">OCSF ✗</div><div class="stat-val" id="s-ocsf_unmatched">—</div></div>
+      <div class="card-header" style="display:flex;justify-content:space-between;align-items:center;">
+        <h2>Pipeline Stats</h2>
+        <button onclick="toggleStats()" id="stats-toggle-btn"
+                style="background:none;border:none;color:var(--muted);cursor:pointer;font-size:14px;padding:2px 6px;">&#9650;</button>
       </div>
-      <div class="store-row">
-        <div class="store-cell store-active"><div class="store-label">Active</div><div class="store-val" id="ts-ACTIVE">—</div></div>
-        <div class="store-cell store-pending"><div class="store-label">Pending</div><div class="store-val" id="ts-PENDING_MERGE">—</div></div>
-        <div class="store-cell store-merged"><div class="store-label">Merged</div><div class="store-val" id="ts-MERGED">—</div></div>
+      <div id="stats-body">
+        <div class="stats-grid">
+          <div class="stat-cell"><div class="stat-label">Logs In</div><div class="stat-val" id="s-logs_ingested">—</div></div>
+          <div class="stat-cell"><div class="stat-label">Created</div><div class="stat-val" id="s-templates_created">—</div></div>
+          <div class="stat-cell"><div class="stat-label">Updated</div><div class="stat-val" id="s-templates_updated">—</div></div>
+          <div class="stat-cell"><div class="stat-label">Merged</div><div class="stat-val" id="s-templates_merged">—</div></div>
+          <div class="stat-cell"><div class="stat-label">Split</div><div class="stat-val" id="s-templates_split">—</div></div>
+          <div class="stat-cell"><div class="stat-label">LLM Calls</div><div class="stat-val" id="s-llm_calls">—</div></div>
+          <div class="stat-cell"><div class="stat-label">LLM Err</div><div class="stat-val" id="s-llm_errors">—</div></div>
+          <div class="stat-cell"><div class="stat-label">OCSF ✓</div><div class="stat-val" id="s-ocsf_matched">—</div></div>
+          <div class="stat-cell"><div class="stat-label">OCSF ✗</div><div class="stat-val" id="s-ocsf_unmatched">—</div></div>
+        </div>
+        <div class="store-row">
+          <div class="store-cell store-active"><div class="store-label">Active</div><div class="store-val" id="ts-ACTIVE">—</div></div>
+          <div class="store-cell store-pending"><div class="store-label">Pending</div><div class="store-val" id="ts-PENDING_MERGE">—</div></div>
+          <div class="store-cell store-merged"><div class="store-label">Merged</div><div class="store-val" id="ts-MERGED">—</div></div>
+        </div>
+        <div class="stats-note">Counters are cumulative across all sessions.</div>
       </div>
-      <div class="stats-note">Counters are cumulative across all sessions.</div>
     </div>
   </div>
 
@@ -1129,6 +1135,16 @@ async function reevaluatePoor() {
     const data = await res.json();
     alert(`Queued ${data.queued} template${data.queued !== 1 ? 's' : ''} with score < 6 for re-evaluation`);
   } catch(_) {}
+}
+
+// ── stats collapse ────────────────────────────────────────────────────────────
+let statsCollapsed = false;
+function toggleStats() {
+  statsCollapsed = !statsCollapsed;
+  const body = document.getElementById('stats-body');
+  const btn  = document.getElementById('stats-toggle-btn');
+  body.style.display = statsCollapsed ? 'none' : '';
+  btn.textContent    = statsCollapsed ? '▼' : '▲';
 }
 
 // ── boot ─────────────────────────────────────────────────────────────────────
