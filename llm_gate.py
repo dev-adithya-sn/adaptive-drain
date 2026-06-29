@@ -79,12 +79,13 @@ class LLMGate:
         model: str = "meta-llama/llama-3.2-3b-instruct:free",
     ) -> None:
         self._api_key = api_key
-        self._url = "https://api.groq.com/openai/v1/chat/completions"
-        self._model = "llama-3.1-8b-instant"  # or llama-3.3-70b-versatile
+        self._url = "https://openrouter.ai/api/v1/chat/completions"
+        self._model = "deepseek/deepseek-chat-v3-0324:free"
         self._headers = {
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
-            "HTTP-Referer": "adaptive-drain",
+            "HTTP-Referer": "https://adaptive-drain.onrender.com",
+            "X-Title": "AdaptiveDrain",
         }
 
     # ------------------------------------------------------------------

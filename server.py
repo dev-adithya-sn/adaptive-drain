@@ -24,6 +24,7 @@ app = Flask(__name__, static_folder="static")
 CORS(app)
 
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
+GROQ_API_KEY = os.getenv("OPENROUTER_API_KEY", "") or GROQ_API_KEY
 _HERE = os.path.dirname(os.path.abspath(__file__))
 
 approver    = WebApprover()
