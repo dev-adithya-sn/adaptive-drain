@@ -209,6 +209,24 @@ h2 { font-size: 13px; font-weight: 600; letter-spacing: -0.2px; }
 .lbl { display: inline-block; background: #1e293b; color: #818cf8; border-radius: 3px; padding: 1px 5px; font-family: monospace; font-size: 11px; margin: 0 1px; }
 .tok-wild { color: var(--yellow); font-family: monospace; }
 
+.parsed-th {
+  position: relative;
+  user-select: none;
+  white-space: nowrap;
+}
+.col-resizer {
+  position: absolute;
+  right: 0;
+  top: 0;
+  width: 5px;
+  height: 100%;
+  cursor: col-resize;
+  z-index: 1;
+}
+.col-resizer:hover, .col-resizer.resizing {
+  background: #6366f1;
+}
+
 /* ── results table ── */
 #results-wrap { display: none; }
 .table-scroll { overflow-x: auto; max-height: 420px; overflow-y: auto; border-radius: 6px; border: 1px solid var(--border); }
@@ -472,16 +490,16 @@ tbody tr:hover td { background: rgba(255,255,255,.018); }
       <table style="width:100%;border-collapse:collapse;font-size:11px;">
         <thead>
           <tr style="background:var(--surface2);position:sticky;top:0;z-index:1;">
-            <th style="padding:6px 8px;text-align:left;color:var(--muted);font-weight:500;white-space:nowrap;">Raw Log</th>
-            <th style="padding:6px 8px;text-align:left;color:var(--muted);font-weight:500;white-space:nowrap;">Class</th>
-            <th style="padding:6px 8px;text-align:left;color:var(--muted);font-weight:500;white-space:nowrap;">Activity</th>
-            <th style="padding:6px 8px;text-align:left;color:var(--muted);font-weight:500;white-space:nowrap;">Severity</th>
-            <th style="padding:6px 8px;text-align:left;color:var(--muted);font-weight:500;white-space:nowrap;">Status</th>
-            <th style="padding:6px 8px;text-align:left;color:var(--muted);font-weight:500;white-space:nowrap;">User</th>
-            <th style="padding:6px 8px;text-align:left;color:var(--muted);font-weight:500;white-space:nowrap;">Src IP</th>
-            <th style="padding:6px 8px;text-align:left;color:var(--muted);font-weight:500;white-space:nowrap;">HTTP</th>
-            <th style="padding:6px 8px;text-align:left;color:var(--muted);font-weight:500;white-space:nowrap;">DB</th>
-            <th style="padding:6px 8px;text-align:left;color:var(--muted);font-weight:500;white-space:nowrap;">Service</th>
+            <th class="parsed-th" style="padding:6px 8px;text-align:left;color:var(--muted);font-weight:500;white-space:nowrap;">Raw Log<div class="col-resizer"></div></th>
+            <th class="parsed-th" style="padding:6px 8px;text-align:left;color:var(--muted);font-weight:500;white-space:nowrap;">Class<div class="col-resizer"></div></th>
+            <th class="parsed-th" style="padding:6px 8px;text-align:left;color:var(--muted);font-weight:500;white-space:nowrap;">Activity<div class="col-resizer"></div></th>
+            <th class="parsed-th" style="padding:6px 8px;text-align:left;color:var(--muted);font-weight:500;white-space:nowrap;">Severity<div class="col-resizer"></div></th>
+            <th class="parsed-th" style="padding:6px 8px;text-align:left;color:var(--muted);font-weight:500;white-space:nowrap;">Status<div class="col-resizer"></div></th>
+            <th class="parsed-th" style="padding:6px 8px;text-align:left;color:var(--muted);font-weight:500;white-space:nowrap;">User<div class="col-resizer"></div></th>
+            <th class="parsed-th" style="padding:6px 8px;text-align:left;color:var(--muted);font-weight:500;white-space:nowrap;">Src IP<div class="col-resizer"></div></th>
+            <th class="parsed-th" style="padding:6px 8px;text-align:left;color:var(--muted);font-weight:500;white-space:nowrap;">HTTP<div class="col-resizer"></div></th>
+            <th class="parsed-th" style="padding:6px 8px;text-align:left;color:var(--muted);font-weight:500;white-space:nowrap;">DB<div class="col-resizer"></div></th>
+            <th class="parsed-th" style="padding:6px 8px;text-align:left;color:var(--muted);font-weight:500;white-space:nowrap;">Service<div class="col-resizer"></div></th>
           </tr>
         </thead>
         <tbody id="parsed-tbody">
@@ -1216,6 +1234,36 @@ function renderParsedLogs(logs) {
       <td style="padding:5px 8px;font-family:monospace;">${esc(l.service)}</td>
     </tr>`;
   }).join('');
+  setTimeout(initColResize, 0);
+}
+
+function initColResize() {
+  const table   = document.querySelector('#parsed-logs-card table');
+  if (!table) return;
+  const headers = table.querySelectorAll('th.parsed-th');
+  headers.forEach(th => {
+    const resizer = th.querySelector('.col-resizer');
+    if (!resizer) return;
+    let startX, startW;
+    resizer.addEventListener('mousedown', e => {
+      startX = e.clientX;
+      startW = th.offsetWidth;
+      resizer.classList.add('resizing');
+      const onMove = ev => {
+        const newW = Math.max(40, startW + ev.clientX - startX);
+        th.style.width    = newW + 'px';
+        th.style.minWidth = newW + 'px';
+      };
+      const onUp = () => {
+        resizer.classList.remove('resizing');
+        document.removeEventListener('mousemove', onMove);
+        document.removeEventListener('mouseup', onUp);
+      };
+      document.addEventListener('mousemove', onMove);
+      document.addEventListener('mouseup', onUp);
+      e.preventDefault();
+    });
+  });
 }
 
 async function loadParsedLogs() {
