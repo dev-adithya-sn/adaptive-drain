@@ -1251,7 +1251,7 @@ async function reevaluateAll() {
     const res  = await fetch('/templates/reevaluate', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({min_score: 10}),
+      body: JSON.stringify({min_score: 0}),
     });
     const data = await res.json();
     btn.textContent = `↺ Queued ${data.queued}`;

@@ -299,7 +299,7 @@ class TemplatePipeline:
         try:
             to_review = []
             for t in self.store.all_active():
-                if t.quality_score is not None and t.quality_score >= min_score:
+                if min_score > 0 and t.quality_score is not None and t.quality_score >= min_score:
                     continue
                 tokens = t.pattern.split()
                 wc     = sum(1 for tok in tokens if tok == "<*>")
