@@ -216,35 +216,37 @@ class LLMGate:
             "- Respond with valid JSON only, no markdown fences.\n"
         )
 
+    BATCH_CHUNK_SIZE = 5
+
     def call_batch(self, templates: list[dict], prior_decisions: dict | None = None) -> list[dict]:
-        """Send all templates in one LLM call. Returns list of decisions."""
+        """Send templates in chunks of BATCH_CHUNK_SIZE. Returns combined list of decisions."""
         if not templates:
             return []
 
-        fallback = [
-            {
-                "cluster_id":      t["cluster_id"],
-                "decision":        "keep",
-                "labeled_template": t["template"].replace("<*>", "<unknown>"),
-                "reasoning":       "llm_error",
-                "quality":         {"score": None, "issues": [], "suggestion": ""},
+        def _chunk_fallback(chunk: list[dict], reason: str = "llm_error") -> list[dict]:
+            return [
+                {
+                    "cluster_id":       t["cluster_id"],
+                    "decision":         "keep",
+                    "labeled_template": t["template"].replace("<*>", "<unknown>"),
+                    "reasoning":        reason,
+                    "quality":          {"score": None, "issues": [], "suggestion": ""},
+                }
+                for t in chunk
+            ]
+
+        def _call_chunk(chunk: list[dict]) -> list[dict]:
+            """POST one chunk; returns parsed+validated decisions for that chunk."""
+            prompt = self.build_prompt_batch(chunk, prior_decisions=prior_decisions)
+            body = {
+                "model": self._model,
+                "messages": [
+                    {"role": "system", "content": "Respond only in JSON."},
+                    {"role": "user",   "content": prompt},
+                ],
+                "max_tokens": 4000,
+                "temperature": 0,
             }
-            for t in templates
-        ]
-
-        prompt = self.build_prompt_batch(templates, prior_decisions=prior_decisions)
-        body   = {
-            "model": self._model,
-            "messages": [
-                {"role": "system", "content": "Respond only in JSON."},
-                {"role": "user",   "content": prompt},
-            ],
-            "max_tokens": 4000,
-            "temperature": 0,
-        }
-
-        try:
-            time.sleep(2)
             resp = requests.post(self._url, headers=self._headers, json=body, timeout=60)
             resp.raise_for_status()
             data    = resp.json()
@@ -253,10 +255,10 @@ class LLMGate:
 
             results = parsed.get("templates", [])
             if not isinstance(results, list):
-                return fallback
+                return _chunk_fallback(chunk)
 
-            cluster_ids  = {t["cluster_id"] for t in templates}
-            template_map = {t["cluster_id"]: t["template"] for t in templates}
+            cluster_ids  = {t["cluster_id"] for t in chunk}
+            template_map = {t["cluster_id"]: t["template"] for t in chunk}
 
             out = []
             for r in results:
@@ -272,23 +274,49 @@ class LLMGate:
 
             # fill in any templates the LLM forgot
             returned_ids = {r["cluster_id"] for r in out}
-            for t in templates:
+            for t in chunk:
                 if t["cluster_id"] not in returned_ids:
                     out.append({
-                        "cluster_id":      t["cluster_id"],
-                        "decision":        "keep",
+                        "cluster_id":       t["cluster_id"],
+                        "decision":         "keep",
                         "labeled_template": t["template"].replace("<*>", "<unknown>"),
-                        "reasoning":       "not_returned_by_llm",
-                        "quality":         {"score": None, "issues": [], "suggestion": ""},
+                        "reasoning":        "not_returned_by_llm",
+                        "quality":          {"score": None, "issues": [], "suggestion": ""},
                     })
 
             return out
 
-        except Exception as exc:
-            print(f"[llm_gate] call_batch ERROR: {exc}", flush=True)
-            import traceback; traceback.print_exc()
-            print(f"[LLMGate] batch error: {exc}")
-            return fallback
+        chunks = [
+            templates[i : i + self.BATCH_CHUNK_SIZE]
+            for i in range(0, len(templates), self.BATCH_CHUNK_SIZE)
+        ]
+
+        all_results: list[dict] = []
+        for idx, chunk in enumerate(chunks):
+            if idx > 0:
+                time.sleep(2)
+            try:
+                all_results.extend(_call_chunk(chunk))
+            except requests.HTTPError as exc:
+                if exc.response is not None and exc.response.status_code == 429:
+                    print(f"[llm_gate] 429 on chunk {idx}, retrying after 10s", flush=True)
+                    time.sleep(10)
+                    try:
+                        all_results.extend(_call_chunk(chunk))
+                    except Exception as retry_exc:
+                        print(f"[llm_gate] chunk {idx} retry failed: {retry_exc}", flush=True)
+                        import traceback; traceback.print_exc()
+                        all_results.extend(_chunk_fallback(chunk))
+                else:
+                    print(f"[llm_gate] call_batch ERROR on chunk {idx}: {exc}", flush=True)
+                    import traceback; traceback.print_exc()
+                    all_results.extend(_chunk_fallback(chunk))
+            except Exception as exc:
+                print(f"[llm_gate] call_batch ERROR on chunk {idx}: {exc}", flush=True)
+                import traceback; traceback.print_exc()
+                all_results.extend(_chunk_fallback(chunk))
+
+        return all_results
 
     # ------------------------------------------------------------------
     # API call
