@@ -80,7 +80,7 @@ class LLMGate:
     ) -> None:
         self._api_key = api_key
         self._url = "https://openrouter.ai/api/v1/chat/completions"
-        self._model = "deepseek/deepseek-chat-v3-0324:free"
+        self._model = "deepseek/deepseek-chat"
         self._headers = {
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
