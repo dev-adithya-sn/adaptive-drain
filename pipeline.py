@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 import time
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
 from approver import HumanApprover
@@ -46,6 +48,8 @@ class TemplatePipeline:
         self.splitter = TemplateSplitter(self.drain_adapter, self.store, self.sampler)
         self._llm_decision_cache: dict[str, dict] = {}
         self._ocsf_classify_cache: dict[str, dict] = {}
+        self._classify_cache_lock = threading.Lock()
+        self._classify_executor = ThreadPoolExecutor(max_workers=3)
         from collections import deque
         self._parsed_logs: deque = deque(maxlen=100)
 
@@ -204,11 +208,8 @@ class TemplatePipeline:
         samples  = self.sampler.get(cid)
         for raw_log in samples:
             try:
-                # Always run classify_template once per template for enrichment
-                if template not in self._ocsf_classify_cache:
-                    raw_samples = self.sampler.get(cid)[:3]
-                    self._ocsf_classify_cache[template] = self.llm_gate.classify_template(template, raw_samples)
-                cached = self._ocsf_classify_cache.get(template, {})
+                with self._classify_cache_lock:
+                    cached = self._ocsf_classify_cache.get(template, {})
 
                 # Use OCSF rule match for class/activity/severity if available
                 ocsf_label = self.normalizer.normalize(template)
@@ -288,12 +289,56 @@ class TemplatePipeline:
         if not decisions:
             return {"executed": 0, "reparse": None}
 
+        # Phase 1: execute all decisions first (fast, no LLM calls)
+        approved_cluster_ids = []
         for dec in decisions:
             try:
                 self._execute_decision(dec)
-                self._parse_cluster_logs(str(dec.get("cluster_id", "")))
+                approved_cluster_ids.append(str(dec.get("cluster_id", "")))
             except Exception as e:
                 print(f"[pipeline] execute_decision error: {e}")
+
+        # Phase 2: classify all NEW unique templates in parallel before parsing
+        templates_to_classify = []
+        for cid in approved_cluster_ids:
+            t = self.store.get(cid)
+            if not t:
+                continue
+            template = t.labeled_template or t.pattern
+            with self._classify_cache_lock:
+                already_cached = template in self._ocsf_classify_cache
+            if not already_cached:
+                templates_to_classify.append((cid, template))
+
+        if templates_to_classify:
+            def _classify_one(cid_template):
+                cid, template = cid_template
+                samples = self.sampler.get(cid)[:3]
+                try:
+                    result = self.llm_gate.classify_template(template, samples)
+                except Exception as e:
+                    print(f"[pipeline] classify_template error for {cid}: {e}", flush=True)
+                    result = {"ocsf_class_uid": 0, "ocsf_class_name": "Unknown"}
+                return template, result
+
+            futures = {
+                self._classify_executor.submit(_classify_one, item): item
+                for item in templates_to_classify
+            }
+            for future in as_completed(futures, timeout=60):
+                try:
+                    template, result = future.result()
+                    with self._classify_cache_lock:
+                        self._ocsf_classify_cache[template] = result
+                except Exception as e:
+                    print(f"[pipeline] classify future error: {e}", flush=True)
+
+        # Phase 3: parse all logs now that classify cache is warm
+        for cid in approved_cluster_ids:
+            try:
+                self._parse_cluster_logs(cid)
+            except Exception as e:
+                print(f"[pipeline] parse_cluster_logs error: {e}")
 
         self.approver.clear_batch(batch_id)
         if self.persistence:
