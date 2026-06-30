@@ -2,14 +2,20 @@
 
 from __future__ import annotations
 import time
+import uuid
 from dataclasses import dataclass, field
 from enum import Enum
 
 
 class TemplateStatus(Enum):
-    ACTIVE = "ACTIVE"
-    PENDING_MERGE = "PENDING_MERGE"
-    MERGED = "MERGED"
+    ACTIVE            = "ACTIVE"
+    PENDING_MERGE     = "PENDING_MERGE"
+    MERGED            = "MERGED"
+    # Populated when a log nearly matched an existing template and the LLM +
+    # human still need to decide whether it belongs to that template or is
+    # genuinely new.  Not used on ManagedTemplate itself; exposed here so that
+    # the near-match queue can share the same status vocabulary.
+    NEAR_MATCH_REVIEW = "NEAR_MATCH_REVIEW"
 
 
 @dataclass
@@ -127,3 +133,97 @@ class TemplateStore:
         for tmpl in self._store.values():
             counts[tmpl.status.value] += 1
         return counts
+
+
+# ---------------------------------------------------------------------------
+# Near-match queue
+# ---------------------------------------------------------------------------
+
+@dataclass
+class NearMatchItem:
+    """One log line that nearly matched an existing template, awaiting review."""
+
+    item_id:              str
+    raw_log:              str
+    candidate_cluster_id: str
+    similarity_score:     float
+    status:               str = "pending"  # "pending" | "approved" | "rejected"
+    llm_decision:         str | None = None
+    corrected_template:   str | None = None
+    added_at:             float = field(default_factory=time.time)
+
+
+class NearMatchQueue:
+    """Stores near-match log items awaiting LLM + human review.
+
+    Items can transition from ``pending`` → ``approved`` or ``rejected``
+    (corresponding to ``NEAR_MATCH_REVIEW`` status vocabulary in
+    ``TemplateStatus``).
+    """
+
+    def __init__(self) -> None:
+        self._items: dict[str, NearMatchItem] = {}
+
+    def add(
+        self,
+        raw_log:              str,
+        candidate_cluster_id: str,
+        similarity_score:     float,
+        item_id:              str | None = None,
+    ) -> str:
+        """Enqueue a near-match item and return its item_id."""
+        if item_id is None:
+            item_id = str(uuid.uuid4())
+        self._items[item_id] = NearMatchItem(
+            item_id              = item_id,
+            raw_log              = raw_log,
+            candidate_cluster_id = candidate_cluster_id,
+            similarity_score     = similarity_score,
+        )
+        return item_id
+
+    def get(self, item_id: str) -> NearMatchItem | None:
+        return self._items.get(item_id)
+
+    def get_pending(self) -> list[NearMatchItem]:
+        """Return all items currently in ``pending`` status."""
+        return [i for i in self._items.values() if i.status == "pending"]
+
+    def get_all(self) -> list[NearMatchItem]:
+        return list(self._items.values())
+
+    def approve(
+        self,
+        item_id:            str,
+        llm_decision:       str,
+        corrected_template: str | None = None,
+    ) -> bool:
+        """Mark an item as approved with the given LLM decision.
+
+        Returns True if found, False if not.
+        """
+        item = self._items.get(item_id)
+        if item is None:
+            return False
+        item.status             = "approved"
+        item.llm_decision       = llm_decision
+        item.corrected_template = corrected_template
+        return True
+
+    def reject(self, item_id: str) -> bool:
+        """Mark an item as rejected (will be routed to Drain3)."""
+        item = self._items.get(item_id)
+        if item is None:
+            return False
+        item.status = "rejected"
+        return True
+
+    def remove(self, item_id: str) -> bool:
+        """Remove item from the queue entirely."""
+        return self._items.pop(item_id, None) is not None
+
+    def clear(self) -> None:
+        self._items.clear()
+
+    def __len__(self) -> int:
+        return len(self._items)

@@ -9,6 +9,7 @@ from typing import Any
 
 from approver import HumanApprover
 from drain_adapter import DrainAdapter
+from fast_path_matcher import ExactMatch, FastPathMatcher, NearMatch, NoMatch
 from preprocessor import LogPreprocessor
 from llm_gate import LLMGate
 from metrics import MetricsCollector
@@ -16,7 +17,8 @@ from normalizer import OCSFNormalizer
 from persistence import StatePersistence
 from reservoir_sampler import ReservoirSampler
 from splitter import TemplateSplitter
-from template_store import TemplateStore
+from template_compiler import CompiledTemplateRegistry
+from template_store import NearMatchQueue, TemplateStore
 
 
 class TemplatePipeline:
@@ -59,6 +61,11 @@ class TemplatePipeline:
         self._classify_executor = ThreadPoolExecutor(max_workers=self.CLASSIFY_WORKERS)
         self._parsed_logs: deque = deque(maxlen=self.PARSED_LOGS_MAXLEN)
 
+        # Fast-path matcher (compiled regex against approved templates)
+        self._compiled_registry = CompiledTemplateRegistry()
+        self._fast_path_matcher = FastPathMatcher(self._compiled_registry)
+        self._near_match_queue  = NearMatchQueue()
+
     def _bump(self, counter: str, by: int = 1) -> None:
         if self.metrics is not None:
             self.metrics.increment(counter, by)
@@ -68,7 +75,58 @@ class TemplatePipeline:
     # ------------------------------------------------------------------
 
     def ingest(self, raw_log: str) -> dict:
-        """Process a single raw log line. Never blocks on LLM."""
+        """Process a single raw log line.  Never blocks on LLM.
+
+        Three-way dispatch:
+          1. EXACT_MATCH  → skip preprocessor + Drain3; extract fields via compiled regex.
+          2. NEAR_MATCH   → queue for LLM/human review; hold the log pending decision.
+          3. NO_MATCH     → existing Drain3 flow unchanged.
+        """
+        self._bump("logs_ingested")
+
+        # Fast-path: only active when at least one template has been compiled
+        if len(self._compiled_registry) > 0:
+            fp = self._fast_path_matcher.match(raw_log)
+
+            if isinstance(fp, ExactMatch):
+                self._bump("fast_path_hits")
+                self.sampler.add(fp.cluster_id, raw_log)
+                t = self.store.get(fp.cluster_id)
+                template = (t.labeled_template or t.pattern) if t else ""
+                ocsf_label = self.normalizer.normalize(template) if self.normalizer else None
+                return {
+                    "cluster_id":   fp.cluster_id,
+                    "template":     template,
+                    "change_type":  "NONE",
+                    "original_log": raw_log,
+                    "processed_log": raw_log,
+                    "extractions":  fp.extracted_fields,
+                    "ocsf":         ocsf_label,
+                    "ocsf_event":   None,
+                    "fast_path":    True,
+                }
+
+            if isinstance(fp, NearMatch):
+                self._bump("near_match_queued")
+                self._near_match_queue.add(
+                    raw_log              = raw_log,
+                    candidate_cluster_id = fp.candidate_cluster_id,
+                    similarity_score     = fp.similarity_score,
+                )
+                return {
+                    "cluster_id":   fp.candidate_cluster_id,
+                    "template":     None,
+                    "change_type":  "NEAR_MATCH",
+                    "original_log": raw_log,
+                    "processed_log": raw_log,
+                    "extractions":  {},
+                    "ocsf":         None,
+                    "ocsf_event":   None,
+                    "fast_path":    False,
+                    "near_match":   True,
+                }
+
+        # NO_MATCH (or registry empty): existing Drain3 flow
         pre    = self.preprocessor.process(raw_log)
         result = self.drain_adapter.add_log(pre.processed)
         result["original_log"]  = raw_log
@@ -80,7 +138,6 @@ class TemplatePipeline:
         change_type: str = result["change_type"]
 
         self.sampler.add(cluster_id, raw_log)
-        self._bump("logs_ingested")
 
         if change_type == "NONE":
             self.store.confirm_merge_hit(cluster_id)
@@ -103,6 +160,7 @@ class TemplatePipeline:
             result["ocsf"]       = None
             result["ocsf_event"] = None
 
+        result["fast_path"] = False
         return result
 
     # ------------------------------------------------------------------
@@ -189,6 +247,8 @@ class TemplatePipeline:
                     self.drain_adapter.update_template(target_id, merged_tpl.split())
                 if self.metrics:
                     self.metrics.increment("templates_merged")
+            # Merged template is no longer independently matched
+            self._compiled_registry.remove(cid)
 
         elif decision == "split":
             sub_templates = dec.get("sub_templates", [])
@@ -196,12 +256,19 @@ class TemplatePipeline:
                 new_ids = self.splitter.execute_split(cid, sub_templates, self.sampler.get(cid))
                 if new_ids and self.metrics:
                     self.metrics.increment("templates_split")
+            self._compiled_registry.remove(cid)
 
         elif decision == "reset":
             reset_tpl = dec.get("reset_template")
             if reset_tpl:
                 self.drain_adapter.update_template(cid, reset_tpl.split())
                 t.pattern = reset_tpl
+
+        # Compile/update the fast-path regex for templates that stay ACTIVE
+        if decision in ("keep", "reset"):
+            label = t.labeled_template or t.pattern
+            if label:
+                self._compiled_registry.update(cid, label)
 
     def _parse_cluster_logs(self, cid: str) -> None:
         """Parse all sampled logs for a confirmed template and push to _parsed_logs."""
@@ -472,6 +539,138 @@ class TemplatePipeline:
             import traceback; traceback.print_exc()
             return 0
 
+    # ------------------------------------------------------------------
+    # Near-match LLM review + execution
+    # ------------------------------------------------------------------
+
+    def batch_near_match_review(self) -> dict:
+        """Send all pending near-match items to the LLM for triage.
+
+        Reuses the same Groq semaphore and approver infrastructure as
+        ``batch_review()``.  Returns the batch summary dict.
+        """
+        import uuid as _uuid
+
+        items = self._near_match_queue.get_pending()
+        if not items:
+            return {"batch_id": "", "decisions": [], "queued": 0}
+
+        # Build templates_info for the LLM prompt
+        templates_info: dict[str, dict] = {}
+        for item in items:
+            cid = item.candidate_cluster_id
+            if cid not in templates_info:
+                t = self.store.get(cid)
+                if t:
+                    templates_info[cid] = {
+                        "template":         t.pattern,
+                        "labeled_template": t.labeled_template or t.pattern,
+                        "samples":          self.sampler.get(cid)[:3],
+                    }
+
+        item_dicts = [
+            {
+                "item_id":              item.item_id,
+                "raw_log":              item.raw_log,
+                "candidate_cluster_id": item.candidate_cluster_id,
+                "similarity_score":     item.similarity_score,
+            }
+            for item in items
+        ]
+
+        self._bump("llm_calls")
+        decisions = self.llm_gate.call_near_match_batch(item_dicts, templates_info)
+        batch_id  = str(_uuid.uuid4())
+
+        if self.approver and hasattr(self.approver, "set_batch"):
+            # Near-match decisions go through the same approver queue as template
+            # decisions so the existing UI can render them.
+            self.approver.set_batch(
+                batch_id,
+                decisions,
+                [{"cluster_id": d["item_id"], **d} for d in decisions],
+            )
+        else:
+            # No approver: auto-execute
+            for dec in decisions:
+                self._execute_near_match_decision(dec)
+
+        return {"batch_id": batch_id, "decisions": decisions, "queued": len(decisions)}
+
+    def _execute_near_match_decision(self, dec: dict) -> None:
+        """Apply an approved near-match decision.
+
+        ``same_template_fix_regex``: recompile the candidate template's regex
+        from the corrected labeled_template.
+
+        ``new_template_send_to_drain``: route the raw_log through the existing
+        Drain3 ingest path as a fresh pending template.
+        """
+        item_id  = dec.get("item_id", "")
+        decision = dec.get("decision", "new_template_send_to_drain")
+        item     = self._near_match_queue.get(item_id)
+        if item is None:
+            return
+
+        if decision == "same_template_fix_regex":
+            corrected = dec.get("corrected_template")
+            if corrected:
+                cid = item.candidate_cluster_id
+                t   = self.store.get(cid)
+                if t:
+                    t.labeled_template = corrected
+                    # Recompile the fast-path regex for this cluster
+                    self._compiled_registry.update(cid, corrected)
+            self._near_match_queue.approve(
+                item_id,
+                llm_decision       = decision,
+                corrected_template = dec.get("corrected_template"),
+            )
+
+        elif decision == "new_template_send_to_drain":
+            # Re-ingest through existing Drain3 pipeline
+            # Temporarily remove from fast-path check to avoid re-triggering near-match
+            raw_log = item.raw_log
+            self._near_match_queue.reject(item_id)
+            pre    = self.preprocessor.process(raw_log)
+            result = self.drain_adapter.add_log(pre.processed)
+            cid    = str(result.get("cluster_id", ""))
+            tpl    = result.get("template", "")
+            ct     = result.get("change_type", "NONE")
+            if cid:
+                self.sampler.add(cid, raw_log)
+            if ct == "CREATE":
+                self.store.register(cid, tpl)
+                self.store.add_version(cid, tpl, trigger_log=raw_log)
+            elif ct == "UPDATE":
+                self.store.add_version(cid, tpl, trigger_log=raw_log)
+
+        self._near_match_queue.remove(item_id)
+
+    def execute_near_match_batch(self, batch_id: str) -> dict:
+        """Execute all approved near-match decisions for a batch.
+
+        Called by the server when the human approves a near-match batch
+        (same approval endpoint pattern as ``execute_batch``).
+        """
+        if not self.approver or not hasattr(self.approver, "get_batch"):
+            return {"executed": 0}
+
+        decisions = self.approver.get_batch(batch_id)
+        executed  = 0
+        for dec in decisions:
+            try:
+                self._execute_near_match_decision(dec)
+                executed += 1
+            except Exception as e:
+                print(f"[pipeline] execute_near_match_decision error: {e}")
+
+        self.approver.clear_batch(batch_id)
+        if self.persistence:
+            self.persistence.save(self.store, self.sampler, self._ocsf_classify_cache)
+
+        return {"executed": executed}
+
     def reset(self) -> None:
         """Wipe all in-memory state — templates, decisions, samples, metrics."""
         # Clear template store
@@ -492,6 +691,11 @@ class TemplatePipeline:
         self._llm_decision_cache.clear()
         self._ocsf_classify_cache.clear()
         self._parsed_logs.clear()
+
+        # Clear fast-path state
+        self._compiled_registry = CompiledTemplateRegistry()
+        self._fast_path_matcher = FastPathMatcher(self._compiled_registry)
+        self._near_match_queue.clear()
 
         # Clear approver batches if present
         if self.approver and hasattr(self.approver, '_batches'):
@@ -523,5 +727,10 @@ class TemplatePipeline:
 
     def load(self) -> bool:
         if self.persistence is not None:
-            return self.persistence.load(self.store, self.sampler, self._ocsf_classify_cache)
+            ok = self.persistence.load(self.store, self.sampler, self._ocsf_classify_cache)
+            if ok:
+                # Rebuild the compiled registry from persisted templates
+                n = self._compiled_registry.rebuild_from_store(self.store)
+                print(f"[pipeline] rebuilt compiled registry: {n} templates", flush=True)
+            return ok
         return False

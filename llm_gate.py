@@ -607,6 +607,161 @@ class LLMGate:
     # Candidate finder
     # ------------------------------------------------------------------
 
+    # ------------------------------------------------------------------
+    # Near-match LLM review
+    # ------------------------------------------------------------------
+
+    def build_prompt_near_match(
+        self,
+        items: list[dict],
+        templates_info: dict[str, dict],
+    ) -> str:
+        """Build a prompt for near-match items.
+
+        *items* is a list of dicts, each with:
+          item_id, raw_log, candidate_cluster_id, similarity_score
+
+        *templates_info* maps cluster_id → {template, labeled_template, samples}
+        """
+        blocks = ""
+        for i, item in enumerate(items):
+            cid      = item["candidate_cluster_id"]
+            tinfo    = templates_info.get(cid, {})
+            template = tinfo.get("labeled_template") or tinfo.get("template", "")
+            samples  = tinfo.get("samples", [])
+            sample_block = "\n".join(f"    • {s[:120]}" for s in samples[:3]) or "    (none)"
+            blocks += (
+                f"\nItem {i+1} (item_id={item['item_id']}):\n"
+                f"  Raw log that failed strict match (similarity={item['similarity_score']:.2f}):\n"
+                f"    {item['raw_log'][:200]}\n"
+                f"  Candidate template (cluster_id={cid}):\n"
+                f"    {template}\n"
+                f"  Sample logs from that cluster:\n{sample_block}\n"
+            )
+
+        return (
+            "You are a log-template analyst reviewing near-match events.\n"
+            "Each item below is a raw log that closely resembles an existing compiled template\n"
+            "but failed exact regex matching. Decide for each:\n\n"
+            "  - 'same_template_fix_regex': the log IS the same event type as the candidate\n"
+            "    template, but the strict regex is too rigid (e.g. extra token, whitespace\n"
+            "    variation). Provide a corrected_template string (same format as labeled_template,\n"
+            "    with <ocsf.field.path> wildcards) that would match both the existing samples\n"
+            "    AND this new log.\n\n"
+            "  - 'new_template_send_to_drain': the log is a DIFFERENT event type that happens\n"
+            "    to share literal tokens with the candidate. Route it to Drain3 as a new\n"
+            "    pending template.\n\n"
+            f"{blocks}\n"
+            "Respond ONLY as a JSON array — one object per item in the same order:\n"
+            "[\n"
+            "  {\n"
+            '    "item_id": "string — must match exactly",\n'
+            '    "decision": "same_template_fix_regex" | "new_template_send_to_drain",\n'
+            '    "corrected_template": "string or null — only for same_template_fix_regex",\n'
+            '    "reasoning": "string — one sentence"\n'
+            "  }\n"
+            "]\n\n"
+            "Rules:\n"
+            "- Every item_id must appear exactly once.\n"
+            "- corrected_template must use the same <ocsf.field.path> wildcard vocabulary.\n"
+            "- Respond with valid JSON only, no markdown fences.\n"
+        )
+
+    def call_near_match_batch(
+        self,
+        items: list[dict],
+        templates_info: dict[str, dict],
+    ) -> list[dict]:
+        """Review near-match items via the LLM.  Returns a list of decision dicts.
+
+        Each decision dict has: item_id, decision, corrected_template, reasoning.
+        Falls back to 'new_template_send_to_drain' on any error.
+        """
+        if not items:
+            return []
+
+        def _fallback(reason: str = "llm_error") -> list[dict]:
+            return [
+                {
+                    "item_id":            item["item_id"],
+                    "decision":           "new_template_send_to_drain",
+                    "corrected_template": None,
+                    "reasoning":          reason,
+                }
+                for item in items
+            ]
+
+        prompt = self.build_prompt_near_match(items, templates_info)
+        body = {
+            "model": self._model,
+            "messages": [
+                {"role": "system", "content": "Respond only in JSON."},
+                {"role": "user",   "content": prompt},
+            ],
+            "max_tokens": 800,
+            "temperature": 0,
+        }
+
+        for attempt in range(3):
+            try:
+                with self._groq_semaphore:
+                    resp = requests.post(
+                        self._url, headers=self._headers, json=body, timeout=60
+                    )
+                self._log_rl(resp, "near_match_batch")
+                resp.raise_for_status()
+                content = resp.json()["choices"][0]["message"]["content"]
+                parsed  = self._parse_json(content)
+
+                if not isinstance(parsed, list):
+                    # LLM may wrap in {"templates": [...]}; handle gracefully
+                    if isinstance(parsed, dict):
+                        for key in ("items", "decisions", "results"):
+                            if isinstance(parsed.get(key), list):
+                                parsed = parsed[key]
+                                break
+                if not isinstance(parsed, list):
+                    return _fallback("invalid_response_shape")
+
+                # Index by item_id; fill in missing items with fallback
+                by_id = {d.get("item_id"): d for d in parsed if isinstance(d, dict)}
+                results = []
+                for item in items:
+                    iid = item["item_id"]
+                    dec = by_id.get(iid, {})
+                    results.append({
+                        "item_id":            iid,
+                        "decision":           dec.get("decision", "new_template_send_to_drain"),
+                        "corrected_template": dec.get("corrected_template"),
+                        "reasoning":          dec.get("reasoning", "not_returned_by_llm"),
+                    })
+                return results
+
+            except requests.HTTPError as exc:
+                if exc.response is not None and exc.response.status_code == 429:
+                    retry_after = int(exc.response.headers.get("retry-after", 0))
+                    wait = max(retry_after, 30)
+                    print(
+                        f"[llm_gate] near_match 429, attempt {attempt+1}/3, waiting {wait}s",
+                        flush=True,
+                    )
+                    if attempt < 2:
+                        time.sleep(wait)
+                        continue
+                    print("[llm_gate] near_match 429 exhausted retries", flush=True)
+                    return _fallback("rate_limited")
+                print(f"[llm_gate] near_match ERROR: {exc}", flush=True)
+                return _fallback()
+            except Exception as exc:
+                print(f"[llm_gate] near_match ERROR: {exc}", flush=True)
+                return _fallback()
+
+        return _fallback("rate_limited")
+
+    # ------------------------------------------------------------------
+    # Candidate finder
+    # ------------------------------------------------------------------
+
     def find_candidates(
         self,
         new_template: str,
