@@ -21,6 +21,8 @@ from template_store import TemplateStore
 class TemplatePipeline:
     """Log ingestion pipeline with synchronous batch LLM review after upload."""
 
+    CLASSIFY_WORKERS = 2  # threads for parallel classify_template; real cap is LLMGate.GROQ_CONCURRENCY
+
     def __init__(
         self,
         drain_instance: Any,
@@ -49,7 +51,7 @@ class TemplatePipeline:
         self._llm_decision_cache: dict[str, dict] = {}
         self._ocsf_classify_cache: dict[str, dict] = {}
         self._classify_cache_lock = threading.Lock()
-        self._classify_executor = ThreadPoolExecutor(max_workers=3)
+        self._classify_executor = ThreadPoolExecutor(max_workers=self.CLASSIFY_WORKERS)
         from collections import deque
         self._parsed_logs: deque = deque(maxlen=100)
 

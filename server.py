@@ -26,6 +26,9 @@ CORS(app)
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 _HERE = os.path.dirname(os.path.abspath(__file__))
 
+LOG_UPLOAD_LIMIT          = 200_000  # hard cap on lines accepted per upload
+LOG_UPLOAD_FAST_THRESHOLD =   5_000  # warn in logs above this
+
 approver    = WebApprover()
 normalizer  = OCSFNormalizer(os.path.join(_HERE, "ocsf_map.yml"))
 persistence = StatePersistence(os.path.join(_HERE, "state.json"))
@@ -46,8 +49,96 @@ pipeline = TemplatePipeline(
 if persistence.exists():
     pipeline.load()
 
-_results_store: dict = {}
-_results_lock = threading.Lock()
+_results_store:    dict = {}
+_results_lock    = threading.Lock()
+_upload_sessions:  dict = {}
+_upload_sessions_lock = threading.Lock()
+
+
+def _build_report(filename: str, results: list) -> dict:
+    ocsf_classes:  Counter = Counter()
+    change_types:  Counter = Counter()
+    unmatched_map: dict    = {}
+    for r in results:
+        change_types[r["change_type"]] += 1
+        if r.get("ocsf") and r["ocsf"].get("ocsf_class_name"):
+            ocsf_classes[r["ocsf"]["ocsf_class_name"]] += 1
+        if not r.get("ocsf"):
+            cid = r.get("cluster_id")
+            if cid:
+                if cid not in unmatched_map:
+                    unmatched_map[cid] = {"cluster_id": cid, "template": r.get("template", ""), "count": 0}
+                unmatched_map[cid]["count"] += 1
+    unique_clusters = len({r["cluster_id"] for r in results if r.get("cluster_id")})
+    return {
+        "filename":            filename,
+        "total_logs":          len(results),
+        "unique_templates":    unique_clusters,
+        "compression_pct":     round((1 - unique_clusters / max(len(results), 1)) * 100, 1),
+        "change_types":        dict(change_types),
+        "ocsf_matched":        sum(1 for r in results if r.get("ocsf")),
+        "ocsf_unmatched":      sum(1 for r in results if not r.get("ocsf")),
+        "ocsf_breakdown":      dict(ocsf_classes),
+        "unmatched_templates": sorted(unmatched_map.values(), key=lambda x: x["count"], reverse=True)[:5],
+    }
+
+
+def _run_upload(session_id: str, lines: list[str], filename: str) -> None:
+    """Background worker: ingest → batch_review → save → store results."""
+    try:
+        results: list[dict] = []
+        total = len(lines)
+        for i, line in enumerate(lines):
+            result = pipeline.ingest(line)
+            results.append({
+                "log":              line[:120],
+                "change_type":      result.get("change_type"),
+                "cluster_id":       result.get("cluster_id"),
+                "template":         result.get("template"),
+                "processed_log":    result.get("processed_log"),
+                "extractions":      result.get("extractions", {}),
+                "labeled_template": None,
+                "llm_decision":     None,
+                "llm_reasoning":    None,
+                "ocsf":             result.get("ocsf"),
+                "ocsf_event":       result.get("ocsf_event"),
+            })
+            if i % 500 == 0:
+                with _upload_sessions_lock:
+                    _upload_sessions[session_id]["progress"]["ingested"] = i
+
+        with _upload_sessions_lock:
+            _upload_sessions[session_id]["progress"]["ingested"] = total
+            _upload_sessions[session_id]["progress"]["phase"]    = "reviewing"
+
+        with _results_lock:
+            _results_store[session_id] = results
+
+        batch_result = pipeline.batch_review(results)
+        pipeline.save()
+
+        report = _build_report(filename, results)
+        # cap inline results to 1000 to keep the status response sane for large uploads
+        inline_results = results[:1000]
+
+        with _upload_sessions_lock:
+            _upload_sessions[session_id].update({
+                "status":     "done",
+                "report":     report,
+                "results":    inline_results,
+                "total":      total,
+                "batch_id":   batch_result.get("batch_id", ""),
+                "llm_queued": batch_result.get("queued", 0),
+                "progress":   {"total": total, "ingested": total, "phase": "done"},
+            })
+    except Exception as exc:
+        print(f"[server] upload error for {session_id}: {exc}", flush=True)
+        import traceback; traceback.print_exc()
+        with _upload_sessions_lock:
+            _upload_sessions[session_id].update({
+                "status": "error",
+                "error":  str(exc),
+            })
 
 
 @app.route("/")
@@ -64,69 +155,40 @@ def upload():
     import uuid
     session_id = str(uuid.uuid4())
     lines = file.read().decode("utf-8", errors="replace").splitlines()
-    lines = [l for l in lines if l.strip()][:200_000]
+    lines = [l for l in lines if l.strip()][:LOG_UPLOAD_LIMIT]
+    filename = file.filename
 
-    results = []
-    for line in lines:
-        result = pipeline.ingest(line)
-        results.append({
-            "log":              line[:120],
-            "change_type":      result.get("change_type"),
-            "cluster_id":       result.get("cluster_id"),
-            "template":         result.get("template"),
-            "processed_log":    result.get("processed_log"),
-            "extractions":      result.get("extractions", {}),
-            "labeled_template": None,
-            "llm_decision":     None,
-            "llm_reasoning":    None,
-            "ocsf":             result.get("ocsf"),
-            "ocsf_event":       result.get("ocsf_event"),
-        })
+    if len(lines) > LOG_UPLOAD_FAST_THRESHOLD:
+        print(f"[server] large upload: {len(lines)} lines for session {session_id}", flush=True)
 
-    with _results_lock:
-        _results_store[session_id] = results
+    with _upload_sessions_lock:
+        _upload_sessions[session_id] = {
+            "status":     "processing",
+            "progress":   {"total": len(lines), "ingested": 0, "phase": "ingesting"},
+            "report":     None,
+            "results":    None,
+            "total":      len(lines),
+            "batch_id":   "",
+            "llm_queued": 0,
+            "error":      None,
+        }
 
-    # Batch LLM review (synchronous — happens before response)
-    batch_result = pipeline.batch_review(results)
+    threading.Thread(
+        target=_run_upload,
+        args=(session_id, lines, filename),
+        daemon=True,
+    ).start()
 
-    pipeline.save()
+    return jsonify({"session_id": session_id, "status": "processing", "total_lines": len(lines)})
 
-    # Build upload report
-    ocsf_classes  = Counter()
-    change_types  = Counter()
-    unmatched_map: dict = {}
-    for r in results:
-        change_types[r["change_type"]] += 1
-        if r.get("ocsf") and r["ocsf"].get("ocsf_class_name"):
-            ocsf_classes[r["ocsf"]["ocsf_class_name"]] += 1
-        if not r.get("ocsf"):
-            cid = r.get("cluster_id")
-            if cid:
-                if cid not in unmatched_map:
-                    unmatched_map[cid] = {"cluster_id": cid, "template": r.get("template", ""), "count": 0}
-                unmatched_map[cid]["count"] += 1
 
-    unique_clusters = len({r["cluster_id"] for r in results if r.get("cluster_id")})
-    report = {
-        "filename":          file.filename,
-        "total_logs":        len(results),
-        "unique_templates":  unique_clusters,
-        "compression_pct":   round((1 - unique_clusters / max(len(results), 1)) * 100, 1),
-        "change_types":      dict(change_types),
-        "ocsf_matched":      sum(1 for r in results if r.get("ocsf")),
-        "ocsf_unmatched":    sum(1 for r in results if not r.get("ocsf")),
-        "ocsf_breakdown":    dict(ocsf_classes),
-        "unmatched_templates": sorted(unmatched_map.values(), key=lambda x: x["count"], reverse=True)[:5],
-    }
-
-    return jsonify({
-        "session_id": session_id,
-        "total":      len(results),
-        "results":    results,
-        "report":     report,
-        "batch_id":   batch_result.get("batch_id", ""),
-        "llm_queued": batch_result.get("queued", 0),
-    })
+@app.route("/upload-status/<session_id>", methods=["GET"])
+def upload_status(session_id):
+    with _upload_sessions_lock:
+        sess = _upload_sessions.get(session_id)
+    if not sess:
+        return jsonify({"error": "session not found"}), 404
+    return jsonify(sess)
 
 
 @app.route("/templates/reevaluate", methods=["POST"])

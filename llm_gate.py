@@ -5,6 +5,7 @@ import difflib
 import time
 import json
 import re
+import threading
 import requests
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -75,6 +76,10 @@ class LLMGate:
     """Sends template decisions to the Groq API and parses the JSON reply."""
 
     BATCH_WORKERS = 3
+    # Groq free tier: 30 RPM / 6 000 TPM for llama-3.3-70b-versatile.
+    # Semaphore of 2 caps in-flight requests across ALL thread pools so the
+    # practical rate stays ~8-20 RPM (each request takes 3-15 s).
+    GROQ_CONCURRENCY = 2
 
     def __init__(
         self,
@@ -88,6 +93,7 @@ class LLMGate:
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
         }
+        self._groq_semaphore = threading.Semaphore(self.GROQ_CONCURRENCY)
 
     # ------------------------------------------------------------------
     # Prompt builders
@@ -239,7 +245,8 @@ class LLMGate:
             }
 
             def _post_and_parse() -> list[dict]:
-                resp = requests.post(self._url, headers=self._headers, json=body, timeout=60)
+                with self._groq_semaphore:
+                    resp = requests.post(self._url, headers=self._headers, json=body, timeout=60)
                 resp.raise_for_status()
                 data    = resp.json()
                 content = data["choices"][0]["message"]["content"]
@@ -440,36 +447,50 @@ class LLMGate:
             "}\n"
         )
 
-        try:
-            resp = requests.post(
-                self._url,
-                headers=self._headers,
-                json={
-                    "model": self._model,
-                    "max_tokens": 600,
-                    "temperature": 0,
-                    "messages": [{"role": "user", "content": prompt}],
-                },
-                timeout=20,
-            )
-            resp.raise_for_status()
-            raw = resp.json()["choices"][0]["message"]["content"].strip()
-            # strip fences if present
-            m = _FENCE_RE.search(raw)
-            if m:
-                raw = m.group(1).strip()
-            result = json.loads(raw)
-            # validate required fields
-            uid = int(result.get("ocsf_class_uid", 0))
-            result["ocsf_class_uid"]  = uid
-            result["category_uid"]    = int(result.get("category_uid", 0))
-            result["activity_id"]     = int(result.get("activity_id", 0))
-            result["severity_id"]     = max(1, min(5, int(result.get("severity_id", 1))))
-            result["matched_rule"]    = "llm_classified"
-            return result
-        except Exception as exc:
-            print(f"[llm_gate] classify_template ERROR: {exc}", flush=True)
-            return _FALLBACK_CLASSIFY
+        classify_body = {
+            "model": self._model,
+            "max_tokens": 600,
+            "temperature": 0,
+            "messages": [{"role": "user", "content": prompt}],
+        }
+        for attempt in range(3):
+            try:
+                with self._groq_semaphore:
+                    resp = requests.post(
+                        self._url,
+                        headers=self._headers,
+                        json=classify_body,
+                        timeout=20,
+                    )
+                resp.raise_for_status()
+                raw = resp.json()["choices"][0]["message"]["content"].strip()
+                m = _FENCE_RE.search(raw)
+                if m:
+                    raw = m.group(1).strip()
+                result = json.loads(raw)
+                uid = int(result.get("ocsf_class_uid", 0))
+                result["ocsf_class_uid"]  = uid
+                result["category_uid"]    = int(result.get("category_uid", 0))
+                result["activity_id"]     = int(result.get("activity_id", 0))
+                result["severity_id"]     = max(1, min(5, int(result.get("severity_id", 1))))
+                result["matched_rule"]    = "llm_classified"
+                return result
+            except requests.HTTPError as exc:
+                if exc.response is not None and exc.response.status_code == 429:
+                    retry_after = int(exc.response.headers.get("Retry-After", 0))
+                    wait = max(retry_after, 2 ** (attempt + 1))  # 2 s, 4 s, 8 s
+                    print(f"[llm_gate] classify 429, attempt {attempt+1}/3, waiting {wait}s", flush=True)
+                    if attempt < 2:
+                        time.sleep(wait)
+                        continue
+                    print(f"[llm_gate] classify 429 exhausted retries, using fallback", flush=True)
+                else:
+                    print(f"[llm_gate] classify_template HTTP ERROR: {exc}", flush=True)
+                return _FALLBACK_CLASSIFY
+            except Exception as exc:
+                print(f"[llm_gate] classify_template ERROR: {exc}", flush=True)
+                return _FALLBACK_CLASSIFY
+        return _FALLBACK_CLASSIFY
 
     # ------------------------------------------------------------------
     # API call
@@ -490,7 +511,8 @@ class LLMGate:
             "temperature": 0,
         }
         try:
-            resp = requests.post(self._url, headers=self._headers, json=body, timeout=30)
+            with self._groq_semaphore:
+                resp = requests.post(self._url, headers=self._headers, json=body, timeout=30)
             resp.raise_for_status()
             data = resp.json()
             content: str = data["choices"][0]["message"]["content"]

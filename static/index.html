@@ -592,16 +592,37 @@ async function upload(file) {
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'Upload failed');
 
-    currentSessionId = data.session_id;
-    setStatus(`Ingested ${data.total} lines`, 'ok');
-    metaText.textContent = `${file.name} · ${data.total} lines`;
-    clearBtn.style.display = '';
+    const sid = data.session_id;
+    currentSessionId = sid;
+    const totalLines = data.total_lines || '?';
+    setStatus(`Processing ${totalLines} logs…`);
 
-    renderReport(data.report);
-    renderResults(data.results, data.session_id);
-    // refresh events after upload
-    loadEvents();
-    loadParsedLogs();
+    // Poll until done or error
+    while (true) {
+      await new Promise(r => setTimeout(r, 2000));
+      let sres, sdata;
+      try {
+        sres  = await fetch(`/upload-status/${sid}`);
+        sdata = await sres.json();
+      } catch (e) { continue; }
+
+      const p = sdata.progress || {};
+      if (sdata.status === 'processing') {
+        const phase = p.phase === 'reviewing' ? 'LLM review' : 'ingesting';
+        setStatus(`${phase} — ${p.ingested || 0} / ${p.total || totalLines} logs…`);
+      } else if (sdata.status === 'done') {
+        metaText.textContent = `${file.name} · ${sdata.total} lines`;
+        clearBtn.style.display = '';
+        setStatus(`Done — ${sdata.report.total_logs} logs processed`, 'ok');
+        renderReport(sdata.report);
+        renderResults(sdata.results || [], sid);
+        loadEvents();
+        loadParsedLogs();
+        break;
+      } else if (sdata.status === 'error') {
+        throw new Error(sdata.error || 'Processing failed');
+      }
+    }
   } catch(err) {
     setStatus(err.message, 'err');
   } finally {
