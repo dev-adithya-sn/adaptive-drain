@@ -732,5 +732,14 @@ class TemplatePipeline:
                 # Rebuild the compiled registry from persisted templates
                 n = self._compiled_registry.rebuild_from_store(self.store)
                 print(f"[pipeline] rebuilt compiled registry: {n} templates", flush=True)
+                # Repopulate _parsed_logs from persisted samples + classify cache so the
+                # OCSF Events panel is non-empty after a server restart.  Only active
+                # templates that have already been LLM-reviewed qualify (_parse_cluster_logs
+                # early-returns for llm_decision=None anyway, but being explicit here avoids
+                # iterating over unreviewed templates at all).
+                for t in self.store.all_active():
+                    if getattr(t, "llm_decision", None) is not None:
+                        self._parse_cluster_logs(t.cluster_id)
+                print(f"[pipeline] repopulated {len(self._parsed_logs)} parsed log entries", flush=True)
             return ok
         return False

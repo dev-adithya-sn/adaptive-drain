@@ -989,6 +989,7 @@ async function approveAll(batchId, btn) {
     const data = await res.json();
     btn.textContent = `✓ Applied ${data.executed} decisions`;
     await loadTemplates();
+    loadEvents();
     showReparsePrompt(batchId, data.executed);
   } catch(_) { btn.disabled = false; btn.textContent = '✓ Approve All'; }
 }
