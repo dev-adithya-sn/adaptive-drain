@@ -303,11 +303,23 @@ def get_events():
 
 @app.route("/parsed-logs", methods=["GET"])
 def get_parsed_logs():
-    """Return the last 100 parsed logs with extracted fields."""
-    n = min(int(request.args.get("n", 100)), 100)
+    """Return a page of parsed logs.
+
+    ?n=100      entries per page (max 1000, default 100)
+    ?offset=0   skip this many entries from the most recent (default 0)
+
+    Response: {"logs": [...], "total": <int>}
+    """
+    n      = min(max(int(request.args.get("n", 100)), 1), 1000)
+    offset = max(int(request.args.get("offset", 0)), 0)
     if not hasattr(pipeline, "_parsed_logs") or not pipeline._parsed_logs:
-        return jsonify({"logs": []})
-    return jsonify({"logs": list(pipeline._parsed_logs)[-n:]})
+        return jsonify({"logs": [], "total": 0})
+    all_logs = list(pipeline._parsed_logs)
+    total    = len(all_logs)
+    # Slice newest-first: offset=0 → last n entries; offset=n → next n back, etc.
+    end   = max(total - offset, 0)
+    start = max(end - n, 0)
+    return jsonify({"logs": all_logs[start:end], "total": total})
 
 
 @app.route("/stats", methods=["GET"])

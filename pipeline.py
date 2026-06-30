@@ -3,6 +3,7 @@
 from __future__ import annotations
 import time
 import threading
+from collections import deque
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
@@ -21,7 +22,11 @@ from template_store import TemplateStore
 class TemplatePipeline:
     """Log ingestion pipeline with synchronous batch LLM review after upload."""
 
-    CLASSIFY_WORKERS = 2  # threads for parallel classify_template; real cap is LLMGate.GROQ_CONCURRENCY
+    CLASSIFY_WORKERS  = 2       # threads for parallel classify_template; real cap is LLMGate.GROQ_CONCURRENCY
+    # 10k × ~5 KB/entry ≈ 50 MB — safe on Render free/starter (512 MB).
+    # Parsed logs are derived from persisted classify cache + reservoir samples
+    # so in-memory-only is fine; raise here to increase the live dashboard window.
+    PARSED_LOGS_MAXLEN = 10_000
 
     def __init__(
         self,
@@ -52,8 +57,7 @@ class TemplatePipeline:
         self._ocsf_classify_cache: dict[str, dict] = {}
         self._classify_cache_lock = threading.Lock()
         self._classify_executor = ThreadPoolExecutor(max_workers=self.CLASSIFY_WORKERS)
-        from collections import deque
-        self._parsed_logs: deque = deque(maxlen=100)
+        self._parsed_logs: deque = deque(maxlen=self.PARSED_LOGS_MAXLEN)
 
     def _bump(self, counter: str, by: int = 1) -> None:
         if self.metrics is not None:
