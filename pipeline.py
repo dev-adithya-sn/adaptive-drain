@@ -325,13 +325,16 @@ class TemplatePipeline:
                 self._classify_executor.submit(_classify_one, item): item
                 for item in templates_to_classify
             }
-            for future in as_completed(futures, timeout=60):
-                try:
-                    template, result = future.result()
-                    with self._classify_cache_lock:
-                        self._ocsf_classify_cache[template] = result
-                except Exception as e:
-                    print(f"[pipeline] classify future error: {e}", flush=True)
+            try:
+                for future in as_completed(futures, timeout=60):
+                    try:
+                        template, result = future.result()
+                        with self._classify_cache_lock:
+                            self._ocsf_classify_cache[template] = result
+                    except Exception as e:
+                        print(f"[pipeline] classify future error: {e}", flush=True)
+            except TimeoutError:
+                print("[pipeline] classify timed out after 60s, continuing with partial results", flush=True)
 
         # Phase 3: parse all logs now that classify cache is warm
         for cid in approved_cluster_ids:
@@ -342,7 +345,7 @@ class TemplatePipeline:
 
         self.approver.clear_batch(batch_id)
         if self.persistence:
-            self.persistence.save(self.store, self.sampler)
+            self.persistence.save(self.store, self.sampler, self._ocsf_classify_cache)
 
         reparse_result = None
         if reparse:
@@ -436,7 +439,7 @@ class TemplatePipeline:
                     "wildcard_ratio": wc / max(len(tokens), 1),
                 })
 
-            print(f"[reevaluate] active templates: {len(list(self.store.all_active()))}, to_review: {len(to_review)}", flush=True)
+            print(f"[reevaluate] active templates: {len(to_review)}, to_review: {len(to_review)}", flush=True)
 
             if not to_review:
                 return 0
@@ -509,10 +512,10 @@ class TemplatePipeline:
 
     def save(self) -> bool:
         if self.persistence is not None:
-            return self.persistence.save(self.store, self.sampler)
+            return self.persistence.save(self.store, self.sampler, self._ocsf_classify_cache)
         return False
 
     def load(self) -> bool:
         if self.persistence is not None:
-            return self.persistence.load(self.store, self.sampler)
+            return self.persistence.load(self.store, self.sampler, self._ocsf_classify_cache)
         return False

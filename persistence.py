@@ -24,33 +24,36 @@ class StatePersistence:
     def __init__(self, path: str) -> None:
         self.path = path
 
-    def save(self, store: TemplateStore, sampler: ReservoirSampler) -> bool:
+    def save(
+        self,
+        store: TemplateStore,
+        sampler: ReservoirSampler,
+        ocsf_classify_cache: dict | None = None,
+    ) -> bool:
         """Atomically write current state to disk. Returns True on success."""
         try:
             templates = [
                 {
-                    "cluster_id": t.cluster_id,
-                    "pattern": t.pattern,
-                    "status": t.status.value,
-                    "merge_target_id": t.merge_target_id,
+                    "cluster_id":         t.cluster_id,
+                    "pattern":            t.pattern,
+                    "status":             t.status.value,
+                    "merge_target_id":    t.merge_target_id,
                     "confirmation_count": t.confirmation_count,
-                    "created_at": t.created_at,
+                    "created_at":         t.created_at,
                     "labeled_template":   t.labeled_template,
                     "llm_decision":       t.llm_decision,
                     "llm_reasoning":      t.llm_reasoning,
-                    "quality_score":      t.quality_score,
-                    "quality_issues":     t.quality_issues,
-                    "quality_suggestion": t.quality_suggestion,
                     "versions":           t.versions,
                 }
                 for t in store._store.values()
             ]
             payload = {
-                "version": _VERSION,
-                "saved_at": time.time(),
-                "templates": templates,
-                "reservoirs": {cid: list(logs) for cid, logs in sampler._reservoirs.items()},
-                "reservoir_counts": dict(sampler._counts),
+                "version":            _VERSION,
+                "saved_at":           time.time(),
+                "templates":          templates,
+                "reservoirs":         {cid: list(logs) for cid, logs in sampler._reservoirs.items()},
+                "reservoir_counts":   dict(sampler._counts),
+                "ocsf_classify_cache": ocsf_classify_cache or {},
             }
             tmp_path = self.path + ".tmp"
             with open(tmp_path, "w", encoding="utf-8") as fh:
@@ -61,10 +64,16 @@ class StatePersistence:
             print(f"[persistence] save failed: {exc}")
             return False
 
-    def load(self, store: TemplateStore, sampler: ReservoirSampler) -> bool:
+    def load(
+        self,
+        store: TemplateStore,
+        sampler: ReservoirSampler,
+        ocsf_classify_cache: dict | None = None,
+    ) -> bool:
         """Restore state from disk into the given store and sampler.
 
         Returns False if the file is missing, unparseable, or the wrong version.
+        If ocsf_classify_cache is provided, it is populated from the saved cache.
         """
         try:
             with open(self.path, "r", encoding="utf-8") as fh:
@@ -84,20 +93,20 @@ class StatePersistence:
                 managed: ManagedTemplate | None = store.get(cid)
                 if managed is None:
                     continue
-                managed.status = TemplateStatus(t["status"])
-                managed.merge_target_id = t["merge_target_id"]
+                managed.status             = TemplateStatus(t["status"])
+                managed.merge_target_id    = t["merge_target_id"]
                 managed.confirmation_count = t["confirmation_count"]
-                managed.created_at = t["created_at"]
+                managed.created_at         = t["created_at"]
                 managed.labeled_template   = t.get("labeled_template")
                 managed.llm_decision       = t.get("llm_decision")
                 managed.llm_reasoning      = t.get("llm_reasoning")
-                managed.quality_score      = t.get("quality_score")
-                managed.quality_issues     = t.get("quality_issues", [])
-                managed.quality_suggestion = t.get("quality_suggestion")
                 managed.versions           = t.get("versions", [])
 
             sampler._reservoirs = {cid: list(logs) for cid, logs in payload.get("reservoirs", {}).items()}
-            sampler._counts = dict(payload.get("reservoir_counts", {}))
+            sampler._counts     = dict(payload.get("reservoir_counts", {}))
+
+            if ocsf_classify_cache is not None:
+                ocsf_classify_cache.update(payload.get("ocsf_classify_cache", {}))
 
             # Rebuild the reverse index from restored PENDING_MERGE templates.
             store._pending_by_target = {}
