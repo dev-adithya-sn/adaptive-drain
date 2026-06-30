@@ -101,7 +101,7 @@ def test_classify_non_429_http_error_returns_fallback_immediately():
 
 
 def test_classify_respects_retry_after_header():
-    """classify_template should use Retry-After header value when larger than backoff."""
+    """classify_template should use Retry-After header value when larger than the 30s minimum."""
     gate = _make_gate()
     import requests
 
@@ -109,8 +109,9 @@ def test_classify_respects_retry_after_header():
 
     def side_effect(*args, **kwargs):
         if len(sleep_calls) == 0:
+            # 60 > 30s minimum, so header value should win
             raise requests.HTTPError(
-                response=MagicMock(status_code=429, headers={"Retry-After": "15"})
+                response=MagicMock(status_code=429, headers={"retry-after": "60"})
             )
         return _ok_response('{"ocsf_class_uid":0,"ocsf_class_name":"","category_uid":0,'
                              '"activity_id":0,"severity_id":1}')
@@ -120,7 +121,7 @@ def test_classify_respects_retry_after_header():
         gate.classify_template("t <*>", ["log"])
 
     assert len(sleep_calls) == 1
-    assert sleep_calls[0] == 15  # Retry-After=15 > backoff=2, so 15 wins
+    assert sleep_calls[0] == 60  # Retry-After=60 > 30s minimum, so header wins
 
 
 def test_semaphore_limits_concurrency():
@@ -156,3 +157,50 @@ def test_semaphore_limits_concurrency():
     assert concurrent_high_water <= gate.GROQ_CONCURRENCY, (
         f"concurrency {concurrent_high_water} exceeded semaphore limit {gate.GROQ_CONCURRENCY}"
     )
+
+
+def test_call_batch_retries_on_429_then_succeeds():
+    """call_batch should retry a chunk up to 3 times on 429, succeeding on 2nd attempt."""
+    gate = _make_gate()
+    import requests
+
+    ok_payload = '{"templates": [{"cluster_id": "1", "decision": "keep", "labeled_template": "t <unknown>", "reasoning": "ok"}]}'
+    call_count = 0
+
+    def side_effect(*args, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            raise requests.HTTPError(
+                response=MagicMock(status_code=429, headers={"retry-after": "0"})
+            )
+        return _ok_response(ok_payload)
+
+    templates = [{"cluster_id": "1", "template": "t <*>", "samples": [], "wildcard_ratio": 0.5}]
+
+    with patch("requests.post", side_effect=side_effect), \
+         patch("time.sleep"):
+        results = gate.call_batch(templates)
+
+    assert call_count == 2, f"expected 2 calls (1 retry), got {call_count}"
+    assert results[0]["decision"] == "keep"
+
+
+def test_call_batch_exhausts_retries_returns_rate_limited():
+    """call_batch should return rate_limited fallback after 3 consecutive 429s."""
+    gate = _make_gate()
+    import requests
+
+    def always_429(*args, **kwargs):
+        raise requests.HTTPError(
+            response=MagicMock(status_code=429, headers={"retry-after": "0"})
+        )
+
+    templates = [{"cluster_id": "7", "template": "err <*>", "samples": [], "wildcard_ratio": 0.5}]
+
+    with patch("requests.post", side_effect=always_429), \
+         patch("time.sleep"):
+        results = gate.call_batch(templates)
+
+    assert results[0]["reasoning"] == "rate_limited"
+    assert results[0]["cluster_id"] == "7"

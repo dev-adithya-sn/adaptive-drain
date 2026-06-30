@@ -215,6 +215,19 @@ class LLMGate:
 
     BATCH_CHUNK_SIZE = 3
 
+    @staticmethod
+    def _log_rl(resp, tag: str) -> None:
+        """Log Groq rate-limit headers so callers can see real quota headroom."""
+        h = resp.headers
+        retry = h.get("retry-after", "")
+        print(
+            f"[groq_rl] {tag}: "
+            f"rpm={h.get('x-ratelimit-remaining-requests','?')}/{h.get('x-ratelimit-limit-requests','?')} "
+            f"tpm={h.get('x-ratelimit-remaining-tokens','?')}/{h.get('x-ratelimit-limit-tokens','?')}"
+            + (f" retry-after={retry}s" if retry else ""),
+            flush=True,
+        )
+
     def call_batch(self, templates: list[dict], prior_decisions: dict | None = None) -> list[dict]:
         """Send templates in concurrent chunks. Returns combined list of decisions."""
         if not templates:
@@ -247,6 +260,7 @@ class LLMGate:
             def _post_and_parse() -> list[dict]:
                 with self._groq_semaphore:
                     resp = requests.post(self._url, headers=self._headers, json=body, timeout=60)
+                self._log_rl(resp, "call_batch")
                 resp.raise_for_status()
                 data    = resp.json()
                 content = data["choices"][0]["message"]["content"]
@@ -282,25 +296,32 @@ class LLMGate:
                         })
                 return out
 
-            try:
-                return _post_and_parse()
-            except requests.HTTPError as exc:
-                if exc.response is not None and exc.response.status_code == 429:
-                    print(f"[llm_gate] 429, retrying after 30s", flush=True)
-                    time.sleep(30)
-                    try:
-                        return _post_and_parse()
-                    except Exception:
-                        print(f"[llm_gate] 429 retry failed, using fallback", flush=True)
+            for attempt in range(3):
+                try:
+                    return _post_and_parse()
+                except requests.HTTPError as exc:
+                    if exc.response is not None and exc.response.status_code == 429:
+                        retry_after = int(exc.response.headers.get("retry-after", 0))
+                        # 30s minimum so a partial TPM window can reset; use header when longer
+                        wait = max(retry_after, 30)
+                        print(
+                            f"[llm_gate] call_batch 429, attempt {attempt+1}/3, "
+                            f"waiting {wait}s (retry-after={retry_after})",
+                            flush=True,
+                        )
+                        if attempt < 2:
+                            time.sleep(wait)
+                            continue
+                        print("[llm_gate] call_batch 429 exhausted retries, using fallback", flush=True)
                         return _chunk_fallback(chunk, "rate_limited")
-                else:
                     print(f"[llm_gate] call_batch ERROR: {exc}", flush=True)
                     import traceback; traceback.print_exc()
                     return _chunk_fallback(chunk)
-            except Exception as exc:
-                print(f"[llm_gate] call_batch ERROR: {exc}", flush=True)
-                import traceback; traceback.print_exc()
-                return _chunk_fallback(chunk)
+                except Exception as exc:
+                    print(f"[llm_gate] call_batch ERROR: {exc}", flush=True)
+                    import traceback; traceback.print_exc()
+                    return _chunk_fallback(chunk)
+            return _chunk_fallback(chunk, "rate_limited")
 
         chunks = [
             templates[i : i + self.BATCH_CHUNK_SIZE]
@@ -462,6 +483,7 @@ class LLMGate:
                         json=classify_body,
                         timeout=20,
                     )
+                self._log_rl(resp, "classify")
                 resp.raise_for_status()
                 raw = resp.json()["choices"][0]["message"]["content"].strip()
                 m = _FENCE_RE.search(raw)
@@ -477,9 +499,13 @@ class LLMGate:
                 return result
             except requests.HTTPError as exc:
                 if exc.response is not None and exc.response.status_code == 429:
-                    retry_after = int(exc.response.headers.get("Retry-After", 0))
-                    wait = max(retry_after, 2 ** (attempt + 1))  # 2 s, 4 s, 8 s
-                    print(f"[llm_gate] classify 429, attempt {attempt+1}/3, waiting {wait}s", flush=True)
+                    retry_after = int(exc.response.headers.get("retry-after", 0))
+                    wait = max(retry_after, 30)  # 30s minimum; TPM windows can be up to 60s
+                    print(
+                        f"[llm_gate] classify 429, attempt {attempt+1}/3, "
+                        f"waiting {wait}s (retry-after={retry_after})",
+                        flush=True,
+                    )
                     if attempt < 2:
                         time.sleep(wait)
                         continue
@@ -513,6 +539,7 @@ class LLMGate:
         try:
             with self._groq_semaphore:
                 resp = requests.post(self._url, headers=self._headers, json=body, timeout=30)
+            self._log_rl(resp, "call")
             resp.raise_for_status()
             data = resp.json()
             content: str = data["choices"][0]["message"]["content"]
