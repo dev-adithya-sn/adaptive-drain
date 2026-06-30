@@ -64,7 +64,7 @@ def upload():
     import uuid
     session_id = str(uuid.uuid4())
     lines = file.read().decode("utf-8", errors="replace").splitlines()
-    lines = [l for l in lines if l.strip()][:1000]
+    lines = [l for l in lines if l.strip()][:200_000]
 
     results = []
     for line in lines:
