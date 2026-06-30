@@ -53,7 +53,6 @@ _results_lock = threading.Lock()
 
 @app.route("/")
 def index():
-    pipeline.reset()
     return send_from_directory("static", "index.html")
 
 
